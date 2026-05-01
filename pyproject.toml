@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "conference-report"
+version = "0.1.0"
+description = "Turn conference replay URLs into segmented slide-and-transcript research reports."
+readme = "README.md"
+license = {text = "MIT"}
+authors = [{name = "Conference Report contributors"}]
+requires-python = ">=3.10"
+keywords = ["conference", "slides", "asr", "reports", "iclr", "slideslive"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Multimedia :: Video",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Topic :: Text Processing",
+]
+dependencies = [
+  "Pillow>=10.0,<13",
+  "PyYAML>=6.0,<7",
+  "beautifulsoup4>=4.12,<5",
+  "keyring>=25.0,<26",
+  "openai>=2.0,<3",
+  "yt-dlp>=2025.1.15",
+]
+
+[project.optional-dependencies]
+asr = ["faster-whisper>=1.1,<2"]
+dev = ["pytest>=8,<9"]
+speedups = ["lxml>=5,<7"]
+
+[project.urls]
+Homepage = "https://github.com/houyili/conference-report-skill"
+Issues = "https://github.com/houyili/conference-report-skill/issues"
+
+[project.scripts]
+conference-report = "conference_report.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["conference_report*"]

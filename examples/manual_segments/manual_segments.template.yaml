@@ -1,0 +1,17 @@
+talks:
+  - title: Example Talk Title
+    type: oral
+    speakers:
+      - Example Speaker
+    schedule_start: 00:05:00.000
+    schedule_end: 00:25:00.000
+  - title: Example Panel Discussion
+    type: panel
+    speakers: []
+    schedule_start: 00:25:00.000
+    schedule_end: 00:45:00.000
+  - title: Coffee Break
+    type: break
+    speakers: []
+    schedule_start: 00:45:00.000
+    schedule_end: 01:00:00.000

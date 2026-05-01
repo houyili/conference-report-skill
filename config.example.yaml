@@ -1,0 +1,26 @@
+api:
+  provider: openai_responses
+  model: gpt-5.1
+  max_parallel_reports: 4
+  dry_run_without_key: true
+asr:
+  preferred: subtitles
+  fallback: faster_whisper_or_openai
+  whisper_model_size: medium
+segmentation:
+  source: schedule_with_alignment
+  generate_review: true
+  min_talk_seconds: 120
+dedupe:
+  mode: conservative
+  lookback_kept: 8
+  mean_threshold: 1.2
+  changed_threshold: 0.006
+  hash_threshold: 6
+report:
+  language: zh
+  preserve_terms: en
+  detail: slide_by_slide
+  no_model_mode: evidence_bundle
+  max_overview_slides: 12
+  max_transcript_chars_per_slide: 2500

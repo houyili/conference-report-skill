@@ -1,0 +1,11 @@
+# Known-compatible pinned dependency versions for reproducible installs.
+# Use pyproject.toml / requirements.txt for normal installs; use this file
+# only when you need a closely reproducible environment.
+Pillow==12.2.0
+PyYAML==6.0.3
+beautifulsoup4==4.14.3
+faster-whisper==1.2.1
+openai==2.33.0
+yt-dlp==2026.3.17
+keyring==25.6.0
+pytest==8.3.5

@@ -1,0 +1,7 @@
+Pillow>=10.0,<13
+PyYAML>=6.0,<7
+beautifulsoup4>=4.12,<5
+keyring>=25.0,<26
+openai>=2.0,<3
+yt-dlp>=2025.1.15
+

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Conference Report"
+  short_description: "Conference replays to grounded Chinese reports"
+  default_prompt: "Build grounded reports for this conference replay URL:"
