@@ -10,8 +10,10 @@ The project is a reusable CLI plus a Codex/agent skill. It is designed for ICLR 
 
 ```text
 raw/                         # metadata, page dumps, media, subtitles
+raw/audio/                   # preserved source audio/media when asr.save_audio is true
 asr/timeline.txt             # [HH:MM:SS.mmm] transcript text
 asr/timeline.jsonl           # structured ASR rows
+asr/audio/                   # 16 kHz mono WAV used for local/API ASR or audit
 slides_original/             # original [time].png screenshots
 slides_dedup/                # representative slide PNGs
 dedup_groups.json            # provenance-preserving visual clusters
@@ -128,6 +130,8 @@ Credential lookup order is:
 
 The repository does not require or store private API keys in files. `.env`, cookies, raw media, screenshots, subtitles, transcripts, and generated outputs are ignored by git.
 
+Page dumps created by `yt-dlp --write-pages` are renamed to neutral `page-0001.dump` style filenames after extraction so transient tokens or signed URL query strings are not preserved in generated filenames.
+
 For restricted conference pages, use browser cookies only when you are authorized to access the content:
 
 ```bash
@@ -160,6 +164,16 @@ conference-report validate --out outputs/run --config config.example.yaml
 ```
 
 If there is no OpenAI key and `dry_run_without_key: true`, the `report` step emits evidence bundles instead of pretending they are final research reports. Evidence bundles are useful for review, but they are not finished reports.
+
+By default `config.example.yaml` keeps an audio audit artifact even when platform subtitles are available:
+
+```yaml
+asr:
+  save_audio: true
+  audio_required: false
+```
+
+Set `save_audio: false` if you only need subtitles/transcripts and want to avoid downloading large media files. Set `audio_required: true` when a run should fail if audio preservation is impossible.
 
 ## Manual Segments
 

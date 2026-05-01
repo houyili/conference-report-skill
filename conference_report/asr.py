@@ -82,6 +82,8 @@ def subtitle_from_info(info_json: Path, raw_dir: Path) -> Path | None:
 def extract_wav(media_path: Path, asr_dir: Path) -> Path:
     ffmpeg = require_tool("ffmpeg")
     wav = ensure_dir(asr_dir / "audio") / f"{media_path.stem}.wav"
+    if wav.exists() and wav.stat().st_size > 0:
+        return wav
     run([ffmpeg, "-y", "-i", str(media_path), "-vn", "-ac", "1", "-ar", "16000", str(wav)])
     return wav
 
@@ -124,36 +126,59 @@ def transcribe_openai(audio_path: Path, model: str = "gpt-4o-transcribe") -> lis
     return rows
 
 
+def preserve_audio_artifact(source: str, out_dir: Path, asr_dir: Path, ingest_manifest: dict[str, Any], *, cookies_from_browser: str | None = None) -> dict[str, str]:
+    media_items = ingest_manifest.get("media") or []
+    media_path = Path(media_items[0]) if media_items else download_audio(source, out_dir, cookies_from_browser=cookies_from_browser)
+    wav_path = extract_wav(media_path, asr_dir)
+    return {"media": str(media_path.resolve()), "wav": str(wav_path.resolve())}
+
+
 def run_asr(source: str, out_dir: Path, cfg: dict[str, Any], *, cookies_from_browser: str | None = None) -> dict[str, str]:
     raw_dir = out_dir / "raw"
     ingest_manifest = read_json(raw_dir / "ingest_manifest.json")
     asr_dir = out_dir / "asr"
+    asr_cfg = cfg.get("asr", {})
     rows: list[dict[str, Any]] = []
+    audio_outputs: dict[str, str] = {}
+    audio_warning: str | None = None
 
-    if cfg["asr"].get("preferred") == "subtitles":
+    if asr_cfg.get("preferred") == "subtitles":
         for info in ingest_manifest.get("info_json", []):
             vtt = subtitle_from_info(Path(info), raw_dir)
             if vtt:
                 rows = vtt_to_rows(vtt)
                 break
 
+    if rows and asr_cfg.get("save_audio", False):
+        try:
+            audio_outputs = preserve_audio_artifact(source, out_dir, asr_dir, ingest_manifest, cookies_from_browser=cookies_from_browser)
+        except SystemExit as exc:
+            audio_warning = str(exc)
+            if asr_cfg.get("audio_required", False):
+                raise
+            print(f"Warning: could not preserve audio artifact: {exc}")
+
     if not rows:
         media_items = ingest_manifest.get("media") or []
         media_path = Path(media_items[0]) if media_items else download_audio(source, out_dir, cookies_from_browser=cookies_from_browser)
         audio_path = extract_wav(media_path, asr_dir)
-        fallback = cfg["asr"].get("fallback", "faster_whisper_or_openai")
+        audio_outputs = {"media": str(media_path.resolve()), "wav": str(audio_path.resolve())}
+        fallback = asr_cfg.get("fallback", "faster_whisper_or_openai")
         if fallback == "openai":
             rows = transcribe_openai(audio_path)
         elif fallback in {"faster_whisper_or_openai", "auto"}:
             if faster_whisper_available():
-                rows = transcribe_faster_whisper(audio_path, cfg["asr"].get("whisper_model_size", "medium"))
+                rows = transcribe_faster_whisper(audio_path, asr_cfg.get("whisper_model_size", "medium"))
             elif get_openai_api_key():
                 rows = transcribe_openai(audio_path)
             else:
                 raise SystemExit("Install faster-whisper or configure an OpenAI API key for ASR fallback.")
         else:
-            rows = transcribe_faster_whisper(audio_path, cfg["asr"].get("whisper_model_size", "medium"))
+            rows = transcribe_faster_whisper(audio_path, asr_cfg.get("whisper_model_size", "medium"))
 
     outputs = write_asr_outputs(rows, asr_dir)
-    write_json(asr_dir / "asr_manifest.json", {"segments": len(rows), **outputs})
+    manifest = {"segments": len(rows), **outputs, "audio": audio_outputs}
+    if audio_warning:
+        manifest["audio_warning"] = audio_warning
+    write_json(asr_dir / "asr_manifest.json", manifest)
     return outputs

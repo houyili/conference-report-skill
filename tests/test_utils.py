@@ -6,6 +6,7 @@ from unittest import mock
 
 from conference_report.asr import vtt_to_rows
 from conference_report.config import DEFAULT_CONFIG
+from conference_report.ingest import sanitize_page_dump_filenames
 from conference_report.report import low_information_reason
 from conference_report.segment import aligned_talks, load_manual_segments
 from conference_report.utils import format_time, parse_time_seconds, require_tool, write_json
@@ -49,6 +50,21 @@ class ToolLookupTests(unittest.TestCase):
                 mock.patch("conference_report.utils.sys.prefix", tmp),
             ):
                 self.assertEqual(require_tool("yt-dlp"), str(tool.resolve()))
+
+
+class IngestPrivacyTests(unittest.TestCase):
+    def test_page_dump_filenames_are_sanitized(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            dump_dir = Path(tmp)
+            sensitive = dump_dir / "source.example.com_player_access-secret.dump"
+            normal = dump_dir / "conference.example.org_virtual_session.dump"
+            sensitive.write_text("<html>token page</html>", encoding="utf-8")
+            normal.write_text("<html>schedule page</html>", encoding="utf-8")
+            renamed = sanitize_page_dump_filenames(dump_dir)
+            names = sorted(path.name for path in dump_dir.glob("*.dump"))
+            self.assertEqual(renamed, 2)
+            self.assertEqual(names, ["page-0001.dump", "page-0002.dump"])
+            self.assertFalse(any("token" in name or "slideslive" in name for name in names))
 
 
 class ManualSegmentTests(unittest.TestCase):

@@ -33,7 +33,7 @@ Use `--dry-run-report` only when the user explicitly wants evidence bundles inst
 Run stages in order when debugging:
 
 1. `ingest`: save metadata, subtitles, and authorized page dumps with `yt-dlp`.
-2. `asr`: prefer platform subtitles; fall back to local `faster-whisper` or OpenAI transcription if configured.
+2. `asr`: prefer platform subtitles; preserve audio/WAV when `asr.save_audio` is enabled; fall back to local `faster-whisper` or OpenAI transcription if configured.
 3. `slides`: prefer slide metadata; otherwise extract screenshots from video.
 4. `dedupe`: preserve originals, cluster repeated slides, and record `main_interval` plus `all_intervals`.
 5. `segment`: parse the schedule first, align actual talk starts to transcript cues, and skip coffee/poster/lunch/break segments.
@@ -45,6 +45,7 @@ Run stages in order when debugging:
 Each run directory should contain:
 
 - `asr/timeline.txt`: `[HH:MM:SS.mmm] text`
+- `raw/audio/` and `asr/audio/`: preserved source audio/media and 16 kHz WAV when `asr.save_audio: true`
 - `slides_original/`: original screenshots, never deleted during dedupe
 - `slides_dedup/`: representative slide PNGs
 - `dedup_groups.json`: visual slide clusters with provenance and repeated intervals

@@ -7,6 +7,8 @@ asr:
   preferred: subtitles
   fallback: faster_whisper_or_openai
   whisper_model_size: medium
+  save_audio: true
+  audio_required: false
 segmentation:
   source: schedule_with_alignment
   generate_review: true

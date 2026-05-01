@@ -19,6 +19,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "preferred": "subtitles",
         "fallback": "faster_whisper_or_openai",
         "whisper_model_size": "medium",
+        "save_audio": True,
+        "audio_required": False,
     },
     "segmentation": {
         "source": "schedule_with_alignment",

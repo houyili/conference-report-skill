@@ -63,6 +63,25 @@ def promote_best_page_dump(source: str, raw_dir: Path, dump_dir: Path) -> Path |
     return target
 
 
+def sanitize_page_dump_filenames(dump_dir: Path) -> int:
+    if not dump_dir.exists():
+        return 0
+    dumps = sorted(path for path in dump_dir.glob("*.dump") if path.is_file())
+    if not dumps:
+        return 0
+    width = max(4, len(str(len(dumps))))
+    renamed = 0
+    for index, path in enumerate(dumps, start=1):
+        target = dump_dir / f"page-{index:0{width}d}.dump"
+        if path == target:
+            continue
+        if target.exists():
+            target = dump_dir / f"page-{index:0{width}d}-{abs(hash(path.name)) & 0xffff:x}.dump"
+        path.rename(target)
+        renamed += 1
+    return renamed
+
+
 def ingest(source: str, out_dir: Path, *, cookies_from_browser: str | None = None, playlist_items: str = "1") -> dict[str, Any]:
     raw_dir = ensure_dir(out_dir / "raw")
     info_dir = ensure_dir(raw_dir / "info")
@@ -110,6 +129,7 @@ def ingest(source: str, out_dir: Path, *, cookies_from_browser: str | None = Non
         raise SystemExit("yt-dlp metadata ingest failed.")
 
     promoted = promote_best_page_dump(source, raw_dir, page_dump_dir)
+    sanitized_dumps = sanitize_page_dump_filenames(page_dump_dir)
     info_files = sorted(info_dir.glob("*.info.json"))
     if not info_files:
         raise SystemExit("No metadata was extracted. The page may require login/registration cookies.")
@@ -121,6 +141,7 @@ def ingest(source: str, out_dir: Path, *, cookies_from_browser: str | None = Non
     if promoted:
         manifest["page_html"] = str(promoted.resolve())
         manifest["page_dump_dir"] = str(page_dump_dir.resolve())
+        manifest["page_dump_files_sanitized"] = sanitized_dumps
     write_json(raw_dir / "ingest_manifest.json", manifest)
     return manifest
 

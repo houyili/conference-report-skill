@@ -30,14 +30,21 @@ def slides_from_metadata(info_json: Path, slides_dir: Path) -> int:
     if not chapters or not thumb_by_id:
         return 0
     ensure_dir(slides_dir)
-    count = 0
+    candidates = []
     for chapter in chapters:
         slide_id = slide_id_from_chapter(str(chapter.get("title") or ""))
-        if not slide_id or slide_id not in thumb_by_id:
-            continue
+        if slide_id and slide_id in thumb_by_id:
+            candidates.append((chapter, slide_id))
+    total = len(candidates)
+    if total:
+        print(f"Found {total} slide images in metadata for {info_json.name}.")
+    count = 0
+    for index, (chapter, slide_id) in enumerate(candidates, start=1):
         target = slides_dir / f"[{format_time(float(chapter.get('start_time') or 0))}].png"
         if target.exists():
             continue
+        if index == 1 or index == total or index % 10 == 0:
+            print(f"Downloading slide {index}/{total}: {target.name}", flush=True)
         try:
             download_url(thumb_by_id[slide_id], target, data.get("webpage_url"))
             count += 1
