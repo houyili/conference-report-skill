@@ -3,14 +3,13 @@ from __future__ import annotations
 import base64
 import os
 import re
-import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
 from .auth import get_openai_api_key, openai_client_kwargs
-from .utils import ensure_dir, parse_time_seconds, read_json, write_json
+from .utils import ensure_dir, find_tool, parse_time_seconds, read_json, write_json
 
 
 BOILERPLATE_TOKENS = {
@@ -160,11 +159,12 @@ def infer_slide_role(text: str) -> str:
 def ocr_slide_text(image: Path, cache_path: Path) -> str:
     if cache_path.exists():
         return cache_path.read_text(encoding="utf-8", errors="ignore")
-    if shutil.which("tesseract") is None:
+    tesseract = find_tool("tesseract")
+    if tesseract is None:
         return ""
     try:
         proc = subprocess.run(
-            ["tesseract", str(image), "stdout", "-l", "eng", "--psm", "6"],
+            [tesseract, str(image), "stdout", "-l", "eng", "--psm", "6"],
             check=False,
             text=True,
             stdout=subprocess.PIPE,

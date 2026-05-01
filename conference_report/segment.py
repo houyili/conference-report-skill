@@ -135,7 +135,11 @@ def load_manual_segments(path: Path) -> list[dict[str, Any]]:
     import yaml
 
     data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    return data.get("talks", data if isinstance(data, list) else [])
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        return data.get("talks", [])
+    return []
 
 
 def normalize_schedule(schedule: list[dict[str, Any]], first_content: float, final_end: float) -> list[dict[str, Any]]:

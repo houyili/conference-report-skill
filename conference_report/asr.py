@@ -3,10 +3,11 @@ from __future__ import annotations
 import json
 import re
 import urllib.request
+from importlib.util import find_spec
 from pathlib import Path
 from typing import Any
 
-from .auth import openai_client_kwargs
+from .auth import get_openai_api_key, openai_client_kwargs
 from .ingest import download_audio
 from .utils import ensure_dir, format_time, read_json, require_tool, run, write_json
 
@@ -79,9 +80,9 @@ def subtitle_from_info(info_json: Path, raw_dir: Path) -> Path | None:
 
 
 def extract_wav(media_path: Path, asr_dir: Path) -> Path:
-    require_tool("ffmpeg")
+    ffmpeg = require_tool("ffmpeg")
     wav = ensure_dir(asr_dir / "audio") / f"{media_path.stem}.wav"
-    run(["ffmpeg", "-y", "-i", str(media_path), "-vn", "-ac", "1", "-ar", "16000", str(wav)])
+    run([ffmpeg, "-y", "-i", str(media_path), "-vn", "-ac", "1", "-ar", "16000", str(wav)])
     return wav
 
 
@@ -98,6 +99,10 @@ def transcribe_faster_whisper(audio_path: Path, model_size: str) -> list[dict[st
         if text:
             rows.append({"start": seg.start, "end": seg.end, "time": format_time(seg.start), "text": text, "source": "faster-whisper", "confidence": None})
     return rows
+
+
+def faster_whisper_available() -> bool:
+    return find_spec("faster_whisper") is not None
 
 
 def transcribe_openai(audio_path: Path, model: str = "gpt-4o-transcribe") -> list[dict[str, Any]]:
@@ -139,6 +144,13 @@ def run_asr(source: str, out_dir: Path, cfg: dict[str, Any], *, cookies_from_bro
         fallback = cfg["asr"].get("fallback", "faster_whisper_or_openai")
         if fallback == "openai":
             rows = transcribe_openai(audio_path)
+        elif fallback in {"faster_whisper_or_openai", "auto"}:
+            if faster_whisper_available():
+                rows = transcribe_faster_whisper(audio_path, cfg["asr"].get("whisper_model_size", "medium"))
+            elif get_openai_api_key():
+                rows = transcribe_openai(audio_path)
+            else:
+                raise SystemExit("Install faster-whisper or configure an OpenAI API key for ASR fallback.")
         else:
             rows = transcribe_faster_whisper(audio_path, cfg["asr"].get("whisper_model_size", "medium"))
 

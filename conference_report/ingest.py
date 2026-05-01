@@ -80,11 +80,11 @@ def ingest(source: str, out_dir: Path, *, cookies_from_browser: str | None = Non
         write_json(raw_dir / "ingest_manifest.json", manifest)
         return manifest
 
-    require_tool("yt-dlp")
+    yt_dlp = require_tool("yt-dlp")
     save_public_page(source, raw_dir)
     output_template = str(info_dir / "%(playlist_index|000)s-%(title).160B.%(ext)s")
     cmd = [
-        "yt-dlp",
+        yt_dlp,
         "--yes-playlist",
         "--playlist-items",
         playlist_items,
@@ -126,11 +126,11 @@ def ingest(source: str, out_dir: Path, *, cookies_from_browser: str | None = Non
 
 
 def download_audio(source: str, out_dir: Path, *, cookies_from_browser: str | None = None, download_format: str = "ba/bestaudio/b") -> Path:
-    require_tool("yt-dlp")
+    yt_dlp = require_tool("yt-dlp")
     audio_dir = ensure_dir(out_dir / "raw" / "audio")
     output_template = str(audio_dir / "%(playlist_index|000)s-%(title).160B.%(ext)s")
     cmd = [
-        "yt-dlp",
+        yt_dlp,
         "--yes-playlist",
         "--playlist-items",
         "1",

@@ -1,9 +1,11 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from conference_report.asr import vtt_to_rows
-from conference_report.utils import format_time, parse_time_seconds
+from conference_report.segment import load_manual_segments
+from conference_report.utils import format_time, parse_time_seconds, require_tool
 
 
 class TimeTests(unittest.TestCase):
@@ -20,6 +22,32 @@ class VttTests(unittest.TestCase):
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]["time"], "00:00:01.000")
             self.assertEqual(rows[0]["text"], "Hello world")
+
+
+class ToolLookupTests(unittest.TestCase):
+    def test_require_tool_finds_current_python_bin(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bin_dir = Path(tmp) / "bin"
+            bin_dir.mkdir()
+            python = bin_dir / "python"
+            python.write_text("", encoding="utf-8")
+            tool = bin_dir / "yt-dlp"
+            tool.write_text("#!/bin/sh\n", encoding="utf-8")
+            tool.chmod(0o755)
+            with (
+                mock.patch("conference_report.utils.shutil.which", return_value=None),
+                mock.patch("conference_report.utils.sys.executable", str(python)),
+                mock.patch("conference_report.utils.sys.prefix", tmp),
+            ):
+                self.assertEqual(require_tool("yt-dlp"), str(tool.resolve()))
+
+
+class ManualSegmentTests(unittest.TestCase):
+    def test_manual_segments_accept_top_level_list(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "segments.yaml"
+            path.write_text("- title: Talk\n  type: oral\n", encoding="utf-8")
+            self.assertEqual(load_manual_segments(path)[0]["title"], "Talk")
 
 
 if __name__ == "__main__":

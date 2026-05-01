@@ -1,5 +1,7 @@
 # Conference Report Skill
 
+[![CI](https://github.com/houyili/conference-report-skill/actions/workflows/ci.yml/badge.svg)](https://github.com/houyili/conference-report-skill/actions/workflows/ci.yml)
+
 Turn long conference replay URLs or local videos into talk-level Chinese image-text research reports grounded in slide screenshots and speaker transcript.
 
 The project is a reusable CLI plus a Codex/agent skill. It is designed for ICLR virtual pages, SlidesLive pages, YouTube/ordinary video URLs, and local video files. A single replay can contain multiple oral talks, keynotes, panels, Q&A sections, and breaks; the pipeline keeps those separated.
@@ -90,6 +92,17 @@ sudo apt-get install ffmpeg tesseract-ocr
 # Windows with Chocolatey
 choco install ffmpeg tesseract
 ```
+
+## System Compatibility
+
+| System | Status | Notes |
+| --- | --- | --- |
+| macOS 14+ on Apple Silicon | Tested | Fresh install smoke test passed with Python 3.14, Homebrew `ffmpeg`, `ffprobe`, and `tesseract`. Key storage uses macOS Keychain through `keyring`. |
+| macOS Intel | Expected | Same Homebrew dependencies; not yet tested in CI. |
+| Linux x86_64 | Expected | Requires Python 3.10+, `ffmpeg`, and optionally `tesseract`. Key storage uses Secret Service / KWallet when available; otherwise use `OPENAI_API_KEY`. |
+| Windows 10/11 | Expected | Requires Python 3.10+, `ffmpeg` on PATH, and optionally `tesseract`. Key storage uses Windows Credential Manager when available; otherwise use `OPENAI_API_KEY`. |
+
+The CLI searches both the system `PATH` and the active Python environment's script directory, so `yt-dlp` installed into `.venv` is detected even when the shell has not activated the venv.
 
 ## API Key And Privacy
 

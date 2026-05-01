@@ -4,6 +4,7 @@ import json
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -16,9 +17,32 @@ def run(cmd: list[str], *, check: bool = True, cwd: Path | None = None) -> subpr
     return subprocess.run(cmd, check=check, cwd=cwd, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
 
-def require_tool(name: str) -> None:
-    if shutil.which(name) is None:
+def find_tool(name: str) -> str | None:
+    path = shutil.which(name)
+    if path:
+        return path
+    suffix = ".exe" if sys.platform.startswith("win") else ""
+    bin_name = "Scripts" if sys.platform.startswith("win") else "bin"
+    local_bins = [
+        Path(sys.prefix) / bin_name,
+        Path(sys.executable).parent,
+        Path(sys.argv[0]).resolve().parent if sys.argv and sys.argv[0] else None,
+        Path(sys.executable).resolve().parent,
+    ]
+    for directory in local_bins:
+        if directory is None:
+            continue
+        candidate = directory / f"{name}{suffix}"
+        if candidate.exists():
+            return str(candidate.resolve())
+    return None
+
+
+def require_tool(name: str) -> str:
+    path = find_tool(name)
+    if path is None:
         raise SystemExit(f"Missing required command-line tool: {name}")
+    return path
 
 
 def ensure_dir(path: Path) -> Path:

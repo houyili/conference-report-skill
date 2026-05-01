@@ -47,11 +47,11 @@ def slides_from_metadata(info_json: Path, slides_dir: Path) -> int:
 
 
 def slides_from_video(media_path: Path, slides_dir: Path, *, mode: str = "scene", interval_seconds: float = 10.0, scene_threshold: float = 0.08) -> int:
-    require_tool("ffmpeg")
+    ffmpeg = require_tool("ffmpeg")
     ensure_dir(slides_dir)
     if mode == "interval":
         pattern = slides_dir / "raw_%06d.png"
-        run(["ffmpeg", "-y", "-i", str(media_path), "-vf", f"fps=1/{interval_seconds}", str(pattern)])
+        run([ffmpeg, "-y", "-i", str(media_path), "-vf", f"fps=1/{interval_seconds}", str(pattern)])
         count = 0
         for idx, frame in enumerate(sorted(slides_dir.glob("raw_*.png"))):
             frame.rename(slides_dir / f"[{format_time(idx * interval_seconds)}].png")
@@ -59,11 +59,11 @@ def slides_from_video(media_path: Path, slides_dir: Path, *, mode: str = "scene"
         return count
 
     first = slides_dir / "[00:00:00.000].png"
-    run(["ffmpeg", "-y", "-ss", "0", "-i", str(media_path), "-frames:v", "1", str(first)])
+    run([ffmpeg, "-y", "-ss", "0", "-i", str(media_path), "-frames:v", "1", str(first)])
     scene_log = slides_dir / "scene.log"
     raw_pattern = slides_dir / "raw_%06d.png"
     vf = f"select='gt(scene,{scene_threshold})',metadata=print:file={scene_log}"
-    run(["ffmpeg", "-y", "-i", str(media_path), "-vf", vf, "-vsync", "vfr", str(raw_pattern)])
+    run([ffmpeg, "-y", "-i", str(media_path), "-vf", vf, "-vsync", "vfr", str(raw_pattern)])
     times: list[float] = []
     for line in scene_log.read_text(encoding="utf-8", errors="ignore").splitlines():
         match = re.search(r"pts_time:([0-9.]+)", line)

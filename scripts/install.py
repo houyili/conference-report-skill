@@ -129,13 +129,10 @@ def main() -> int:
     print("\nDone. Try:")
     if args.no_venv:
         print("  conference-report build URL --out outputs/run --config config.example.yaml")
-    elif platform.system() == "Windows":
-        print(r"  .venv\Scripts\conference-report build URL --out outputs\run --config config.example.yaml")
     else:
-        print("  .venv/bin/conference-report build URL --out outputs/run --config config.example.yaml")
+        print(f"  {command} build URL --out outputs/run --config config.example.yaml")
     return 0
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
