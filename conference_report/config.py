@@ -25,6 +25,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "generate_review": True,
         "min_talk_seconds": 120,
     },
+    "slides": {
+        "video_mode": "scene",
+        "interval_seconds": 10.0,
+        "scene_threshold": 0.08,
+    },
     "dedupe": {
         "mode": "conservative",
         "lookback_kept": 8,

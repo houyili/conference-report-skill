@@ -87,7 +87,14 @@ def extract_slides(out_dir: Path, cfg: dict[str, Any]) -> dict[str, Any]:
         media = Path(raw_manifest["media"][0])
         if media.suffix.lower() in VIDEO_EXTS:
             source = "video"
-            count = slides_from_video(media, slides_dir)
+            slide_cfg = cfg.get("slides", {})
+            count = slides_from_video(
+                media,
+                slides_dir,
+                mode=str(slide_cfg.get("video_mode", "scene")),
+                interval_seconds=float(slide_cfg.get("interval_seconds", 10.0)),
+                scene_threshold=float(slide_cfg.get("scene_threshold", 0.08)),
+            )
     manifest = {"slides_dir": str(slides_dir.resolve()), "count": len(list(slides_dir.glob("*.png"))), "source": source}
     write_json(out_dir / "slides_manifest.json", manifest)
     return manifest

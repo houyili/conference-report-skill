@@ -290,6 +290,7 @@ def aligned_talks(out_dir: Path, cfg: dict[str, Any], *, manual_segments: Path |
     first_content = transcript[0]["seconds"] if transcript else (intervals[0]["start_seconds"] if intervals else 0.0)
     final_end = max([row["seconds"] for row in transcript] + [i["end_seconds"] for i in intervals] + [first_content + 5])
 
+    manual_mode = manual_segments is not None
     if manual_segments:
         schedule = load_manual_segments(manual_segments)
     else:
@@ -297,6 +298,21 @@ def aligned_talks(out_dir: Path, cfg: dict[str, Any], *, manual_segments: Path |
     if not schedule:
         template = template_segments(out_dir, first_content, final_end)
         schedule = [{"title": "Full Replay", "type": "talk", "speakers": [], "schedule_start": format_time(first_content), "schedule_end": format_time(final_end), "template": str(template.resolve())}]
+    elif manual_mode:
+        normalized_manual = []
+        for item in schedule:
+            start = parse_time_seconds(item.get("aligned_start", item.get("schedule_start", first_content)))
+            end = parse_time_seconds(item.get("aligned_end", item.get("schedule_end", final_end)))
+            normalized_manual.append({
+                **item,
+                "schedule_start": format_time(start),
+                "schedule_end": format_time(end),
+                "_aligned_start_seconds": start,
+                "_aligned_end_seconds": max(start + 1.0, end),
+                "_confidence": item.get("confidence", 0.95),
+                "_evidence": item.get("evidence", ["manual_segments"]),
+            })
+        schedule = normalized_manual
     else:
         schedule = normalize_schedule(schedule, first_content, final_end)
         schedule = align_schedule_to_transcript(schedule, transcript, final_end)
@@ -307,7 +323,8 @@ def aligned_talks(out_dir: Path, cfg: dict[str, Any], *, manual_segments: Path |
         end = float(item.get("_aligned_end_seconds", parse_time_seconds(str(item.get("schedule_end", format_time(final_end)))) if ":" in str(item.get("schedule_end", "")) else final_end))
         title = str(item.get("title") or f"Talk {index}")
         event_type = str(item.get("type") or "talk")
-        reportable = is_reportable(title, event_type) and (end - start) >= float(cfg["segmentation"].get("min_talk_seconds", 120))
+        min_duration_ok = manual_mode or (end - start) >= float(cfg["segmentation"].get("min_talk_seconds", 120))
+        reportable = is_reportable(title, event_type) and min_duration_ok
         evidence = item.get("_evidence", ["schedule" if not item.get("template") else "manual_template_required", "asr/slide bounds"])
         rough_start = str(item.get("schedule_start", format_time(start)))
         rough_end = str(item.get("schedule_end", format_time(end)))

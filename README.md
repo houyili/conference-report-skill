@@ -203,7 +203,7 @@ python3 ~/.codex/skills/.system/skill-creator/scripts/quick_validate.py skills/c
 This is a v1 alpha. It is intentionally conservative:
 
 - SlidesLive-style slide metadata is preferred when available.
-- Otherwise, `ffmpeg` scene/interval screenshots are used.
+- Otherwise, `ffmpeg` scene/interval screenshots are used. For ordinary videos that miss slide changes, set `slides.video_mode: interval` and tune `slides.interval_seconds` in the config.
 - Slide dedupe preserves provenance and never deletes `slides_original/`.
 - Schedule parsing is best-effort and currently strongest for ICLR-style pages.
 - Report writing uses OpenAI Responses API when configured; without a key it emits evidence bundles.

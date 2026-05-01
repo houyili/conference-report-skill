@@ -5,8 +5,9 @@ from pathlib import Path
 from unittest import mock
 
 from conference_report.asr import vtt_to_rows
-from conference_report.segment import load_manual_segments
-from conference_report.utils import format_time, parse_time_seconds, require_tool
+from conference_report.config import DEFAULT_CONFIG
+from conference_report.segment import aligned_talks, load_manual_segments
+from conference_report.utils import format_time, parse_time_seconds, require_tool, write_json
 
 
 class TimeTests(unittest.TestCase):
@@ -55,6 +56,40 @@ class ManualSegmentTests(unittest.TestCase):
             path = Path(tmp) / "segments.yaml"
             path.write_text("- title: Talk\n  type: oral\n", encoding="utf-8")
             self.assertEqual(load_manual_segments(path)[0]["title"], "Talk")
+
+    def test_manual_segments_are_explicit_boundaries(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            asr_dir = root / "asr"
+            asr_dir.mkdir()
+            (asr_dir / "timeline.txt").write_text(
+                "[00:00:00.500] Short talk one.\n[00:00:18.000] Short talk two.\n",
+                encoding="utf-8",
+            )
+            write_json(root / "slide_intervals.json", [])
+            manual = root / "manual.yaml"
+            manual.write_text(
+                "talks:\n"
+                "  - title: Short One\n"
+                "    type: oral\n"
+                "    schedule_start: 0.0\n"
+                "    schedule_end: 12.0\n"
+                "  - title: Break\n"
+                "    type: break\n"
+                "    schedule_start: 12.0\n"
+                "    schedule_end: 17.0\n"
+                "  - title: Short Two\n"
+                "    type: oral\n"
+                "    schedule_start: 17.0\n"
+                "    schedule_end: 30.0\n",
+                encoding="utf-8",
+            )
+            talks = aligned_talks(root, DEFAULT_CONFIG, manual_segments=manual)
+            self.assertEqual(talks[0]["aligned_start"], "00:00:00.000")
+            self.assertEqual(talks[0]["aligned_end"], "00:00:12.000")
+            self.assertTrue(talks[0]["reportable"])
+            self.assertFalse(talks[1]["reportable"])
+            self.assertTrue(talks[2]["reportable"])
 
 
 if __name__ == "__main__":
