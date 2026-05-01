@@ -29,6 +29,14 @@ CHAIR_INTRO_PATTERNS = (
     "we will have",
     "session chair",
 )
+BREAK_SLIDE_PATTERNS = (
+    "coffee break",
+    "lunch break",
+    "poster session",
+    "poster break",
+    "registration",
+    "intermission",
+)
 
 
 def image_data_url(path: Path) -> str:
@@ -111,6 +119,9 @@ def low_information_reason(title: str, ocr_text: str, asr_text: str) -> str | No
     ocr_lower = ocr_text.lower()
     asr_lower = asr_text.lower()
     has_conference_branding = "iclr" in ocr_lower or "international conference" in ocr_lower
+    has_break_label = any(pattern in ocr_lower for pattern in BREAK_SLIDE_PATTERNS)
+    if has_break_label and not has_title:
+        return "break/poster/intermission slide"
     has_only_branding = has_conference_branding and len(info_tokens) <= 3 and not has_title
     chair_intro_only = has_only_branding and any(pattern in asr_lower for pattern in CHAIR_INTRO_PATTERNS)
     if chair_intro_only:

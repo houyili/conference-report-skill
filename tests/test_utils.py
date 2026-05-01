@@ -6,6 +6,7 @@ from unittest import mock
 
 from conference_report.asr import vtt_to_rows
 from conference_report.config import DEFAULT_CONFIG
+from conference_report.report import low_information_reason
 from conference_report.segment import aligned_talks, load_manual_segments
 from conference_report.utils import format_time, parse_time_seconds, require_tool, write_json
 
@@ -90,6 +91,16 @@ class ManualSegmentTests(unittest.TestCase):
             self.assertTrue(talks[0]["reportable"])
             self.assertFalse(talks[1]["reportable"])
             self.assertTrue(talks[2]["reportable"])
+
+
+class ReportEvidenceTests(unittest.TestCase):
+    def test_break_slides_are_low_information_for_talk_reports(self):
+        reason = low_information_reason(
+            "Retrieval-Augmented Evaluation",
+            "Coffee Break No report should be generated for this interval",
+            "Welcome to the first talk.",
+        )
+        self.assertEqual(reason, "break/poster/intermission slide")
 
 
 if __name__ == "__main__":
