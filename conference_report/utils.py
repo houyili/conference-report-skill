@@ -59,9 +59,19 @@ def write_json(path: Path, data: Any) -> None:
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
-def parse_time_seconds(value: str) -> float:
-    value = value.strip().strip("[]")
-    hours, minutes, seconds = value.split(":")
+def parse_time_seconds(value: str | int | float) -> float:
+    if isinstance(value, (int, float)):
+        return float(value)
+    value = str(value).strip().strip("[]")
+    if re.fullmatch(r"\d+(?:\.\d+)?", value):
+        return float(value)
+    parts = value.split(":")
+    if len(parts) == 3:
+        hours, minutes, seconds = parts
+    elif len(parts) == 2:
+        hours, minutes, seconds = "0", parts[0], parts[1]
+    else:
+        raise ValueError(f"Invalid timestamp: {value}")
     return int(hours) * 3600 + int(minutes) * 60 + float(seconds)
 
 

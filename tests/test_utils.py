@@ -13,6 +13,11 @@ class TimeTests(unittest.TestCase):
     def test_roundtrip(self):
         self.assertEqual(format_time(parse_time_seconds("01:02:03.456")), "01:02:03.456")
 
+    def test_parse_numeric_and_mmss(self):
+        self.assertEqual(parse_time_seconds(12.5), 12.5)
+        self.assertEqual(parse_time_seconds("12.5"), 12.5)
+        self.assertEqual(parse_time_seconds("02:03.500"), 123.5)
+
 
 class VttTests(unittest.TestCase):
     def test_vtt_to_rows(self):
