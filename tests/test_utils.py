@@ -1,4 +1,5 @@
 import tempfile
+import sys
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -27,11 +28,12 @@ class VttTests(unittest.TestCase):
 class ToolLookupTests(unittest.TestCase):
     def test_require_tool_finds_current_python_bin(self):
         with tempfile.TemporaryDirectory() as tmp:
-            bin_dir = Path(tmp) / "bin"
+            bin_dir = Path(tmp) / ("Scripts" if sys.platform.startswith("win") else "bin")
             bin_dir.mkdir()
-            python = bin_dir / "python"
+            suffix = ".exe" if sys.platform.startswith("win") else ""
+            python = bin_dir / f"python{suffix}"
             python.write_text("", encoding="utf-8")
-            tool = bin_dir / "yt-dlp"
+            tool = bin_dir / f"yt-dlp{suffix}"
             tool.write_text("#!/bin/sh\n", encoding="utf-8")
             tool.chmod(0o755)
             with (
