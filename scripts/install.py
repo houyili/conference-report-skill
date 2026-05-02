@@ -273,8 +273,28 @@ def candidate_skill_roots(home: Path, env: dict[str, str]) -> list[SkillRootCand
     return candidates
 
 
-def conda_executable() -> str | None:
-    return shutil.which("conda")
+def conda_executable(
+    *,
+    which: callable = shutil.which,
+    exists: callable = lambda path: path.exists(),
+) -> str | None:
+    found = which("conda")
+    if found:
+        return found
+    common = [
+        Path("/opt/anaconda3/condabin/conda"),
+        Path("/opt/anaconda3/bin/conda"),
+        Path("/opt/miniconda3/condabin/conda"),
+        Path("/opt/miniconda3/bin/conda"),
+        Path.home() / "anaconda3" / "condabin" / "conda",
+        Path.home() / "anaconda3" / "bin" / "conda",
+        Path.home() / "miniconda3" / "condabin" / "conda",
+        Path.home() / "miniconda3" / "bin" / "conda",
+    ]
+    for candidate in common:
+        if exists(candidate):
+            return str(candidate)
+    return None
 
 
 def conda_env_python(conda: str, env_name: str) -> Path:

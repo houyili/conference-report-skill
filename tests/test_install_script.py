@@ -100,6 +100,18 @@ class InstallScriptHelperTests(unittest.TestCase):
         self.assertIn("ffprobe", warning)
         self.assertIn("cannot run the full build pipeline", warning.lower())
 
+    def test_conda_executable_checks_common_anaconda_paths_when_not_on_path(self):
+        installer = load_script_module()
+        fake_conda = Path("/opt/anaconda3/condabin/conda")
+
+        self.assertEqual(
+            installer.conda_executable(
+                which=lambda _name: None,
+                exists=lambda path: path == fake_conda,
+            ),
+            str(fake_conda),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
