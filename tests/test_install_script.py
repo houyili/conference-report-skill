@@ -112,6 +112,18 @@ class InstallScriptHelperTests(unittest.TestCase):
             str(fake_conda),
         )
 
+    def test_python_environment_choices_prefer_new_conda_when_no_compatible_python(self):
+        installer = load_script_module()
+
+        options, default = installer.python_environment_choices(
+            compatible_python=None,
+            conda="/opt/anaconda3/condabin/conda",
+            current_is_compatible=False,
+        )
+
+        self.assertEqual(default, 1)
+        self.assertEqual(options[0][0], "conda-create")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -308,19 +308,38 @@ def conda_env_python(conda: str, env_name: str) -> Path:
     return Path(proc.stdout.strip().splitlines()[-1])
 
 
-def choose_python_environment(args: argparse.Namespace) -> tuple[Path, Path | None, bool]:
-    conda = conda_executable()
-    compatible_python = find_compatible_python()
-    options = []
+def python_environment_choices(
+    compatible_python: Path | None,
+    conda: str | None,
+    current_is_compatible: bool,
+) -> tuple[list[tuple[str, str]], int]:
+    options: list[tuple[str, str]] = []
     if compatible_python:
         options.append(("venv", f"Create/use project .venv with {compatible_python}: isolated and easiest to remove"))
     if conda:
-        options.extend([
-            ("conda-existing", "Use an existing conda environment"),
-            ("conda-create", "Create a new conda environment"),
-        ])
-    if is_python_310_plus(sys.executable):
+        if compatible_python is None:
+            options.extend([
+                ("conda-create", "Create a new conda environment"),
+                ("conda-existing", "Use an existing conda environment"),
+            ])
+        else:
+            options.extend([
+                ("conda-existing", "Use an existing conda environment"),
+                ("conda-create", "Create a new conda environment"),
+            ])
+    if current_is_compatible:
         options.append(("current", "Install into the current Python environment"))
+    return options, 1
+
+
+def choose_python_environment(args: argparse.Namespace) -> tuple[Path, Path | None, bool]:
+    conda = conda_executable()
+    compatible_python = find_compatible_python()
+    options, default = python_environment_choices(
+        compatible_python,
+        conda,
+        is_python_310_plus(sys.executable),
+    )
     if not options:
         raise SystemExit(
             "Python 3.10+ is required to install conference-report. "
@@ -329,7 +348,7 @@ def choose_python_environment(args: argparse.Namespace) -> tuple[Path, Path | No
 
     print("\nPython environment")
     print("This controls where Python packages are installed. The recommended choice is project .venv.")
-    choice = choose("Where should dependencies be installed?", options, default=1)
+    choice = choose("Where should dependencies be installed?", options, default=default)
 
     if choice == "current":
         return Path(sys.executable), None, True
