@@ -74,7 +74,7 @@ cd conference-report-skill
 python3 scripts/install.py
 ```
 
-The guided flow can use a project `.venv` (recommended), the current Python environment, or conda when available. It checks whether `faster-whisper` is already installed before suggesting local ASR support, and it can install the bundled skill into a user-selected global agent skills directory.
+The guided flow can use a project `.venv` (recommended), the current Python environment, or conda when available. If using conda, create a new environment rather than installing into `base`. The installer checks whether `faster-whisper` is already installed before suggesting local ASR support, runs `pip check` after package installation, and can install the bundled skill into a user-selected global agent skills directory.
 
 Command-line flags are available for automation and contributors. For example, `--with-dev` installs development dependencies such as `pytest` for running tests; it is not required for normal report generation.
 

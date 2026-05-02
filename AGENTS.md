@@ -20,6 +20,8 @@ The primary first-time install path for normal users is `python3 scripts/install
 
 Before suggesting heavy optional dependencies, inspect the selected Python environment. For local ASR, check whether `faster-whisper` is already installed, report its version, and run a dependency-conflict check before asking whether to install or repair ASR support. The installer may support `.venv`, the current Python environment, or conda, but it must explain the tradeoff and keep `.venv` as the simple default.
 
+When conda is used, prefer creating a new environment and strongly discourage installing into `base` or another shared environment. After installing Python packages, run `pip check` and report any dependency conflicts without claiming the environment is clean.
+
 When installing the global skill, discover existing local candidate skill roots from environment variables and existing agent directories, then ask the user to confirm or type another path. The repository must never hardcode a maintainer-specific target directory.
 
 ## Project Structure & Module Organization

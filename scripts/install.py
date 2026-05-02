@@ -224,6 +224,25 @@ def print_package_status(status: PackageStatus) -> None:
         print(f"- pip check: {status.conflict_report or 'no broken requirements found'}")
 
 
+def pip_check(python: Path) -> tuple[bool, str]:
+    proc = subprocess.run(
+        [str(python), "-m", "pip", "check"],
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    return proc.returncode == 0, (proc.stdout or proc.stderr or "").strip()
+
+
+def dependency_check_warning(report: str) -> str:
+    return (
+        "Warning: pip check reported dependency conflicts in the selected Python environment. "
+        "The CLI may still run, but this environment is not clean:\n"
+        f"{report}"
+    )
+
+
 def candidate_skill_roots(home: Path, env: dict[str, str]) -> list[SkillRootCandidate]:
     candidates: list[SkillRootCandidate] = []
     seen: set[Path] = set()
@@ -308,6 +327,19 @@ def conda_env_python(conda: str, env_name: str) -> Path:
     return Path(proc.stdout.strip().splitlines()[-1])
 
 
+def conda_env_warning(env_name: str) -> str:
+    return (
+        f"Using the conda environment '{env_name}' is not recommended for this installer. "
+        "Installing into base or another shared environment can upgrade packages used by unrelated tools. "
+        "Create a new conda environment instead for the cleanest install."
+    )
+
+
+def command_path_for_python(python: Path, command_name: str) -> Path:
+    suffix = ".exe" if platform.system() == "Windows" else ""
+    return python.parent / f"{command_name}{suffix}"
+
+
 def python_environment_choices(
     compatible_python: Path | None,
     conda: str | None,
@@ -357,6 +389,10 @@ def choose_python_environment(args: argparse.Namespace) -> tuple[Path, Path | No
         env_name = input("Enter the conda environment name to use: ").strip()
         if not env_name:
             raise SystemExit("No conda environment name entered.")
+        if env_name == "base":
+            print("\n" + conda_env_warning(env_name))
+            if not yes("Continue installing into this shared environment anyway?", default=False):
+                raise SystemExit("Installation stopped. Rerun the installer and choose a new conda environment.")
         return conda_env_python(conda, env_name), None, True
     if choice == "conda-create":
         assert conda is not None
@@ -455,7 +491,7 @@ def guided_install(args: argparse.Namespace) -> int:
     else:
         print("Normal install skips developer dependencies such as pytest; they are not required for report generation.")
 
-    python, venv, install_into_current = choose_python_environment(args)
+    python, venv, _install_into_current = choose_python_environment(args)
     run([str(python), "-m", "pip", "install", "--upgrade", "pip"])
 
     asr_status = inspect_package(python, LOCAL_ASR_PACKAGE)
@@ -470,12 +506,17 @@ def guided_install(args: argparse.Namespace) -> int:
 
     run([str(python), "-m", "pip", "install", "-e", editable_spec(with_local_asr, with_dev)])
 
+    clean, dependency_report = pip_check(python)
+    if clean:
+        print(f"\nDependency check: {dependency_report or 'No broken requirements found.'}")
+    else:
+        print("\n" + dependency_check_warning(dependency_report))
+
     maybe_install_system_deps()
 
     path = os.environ.get("PATH", "")
-    if venv is not None:
-        bin_dir = str(venv_command(venv, "conference-report").parent)
-        path = bin_dir + os.pathsep + path
+    command = command_path_for_python(python, "conference-report")
+    path = str(command.parent) + os.pathsep + path
     print("\nTool check:")
     tool_status("conference-report", extra_path=path)
     tool_status("yt-dlp", extra_path=path)
@@ -488,7 +529,6 @@ def guided_install(args: argparse.Namespace) -> int:
     if missing_required_tools:
         print("\n" + missing_required_tool_warning(missing_required_tools))
 
-    command = Path("conference-report") if install_into_current else venv_command(venv or args.venv, "conference-report")
     print("\nOpenAI API key")
     print("Without a key, the report step can still emit evidence bundles instead of final automated reports.")
     status = subprocess.run([str(command), "auth", "status", "openai"], cwd=ROOT)

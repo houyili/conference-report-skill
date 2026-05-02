@@ -124,6 +124,30 @@ class InstallScriptHelperTests(unittest.TestCase):
         self.assertEqual(default, 1)
         self.assertEqual(options[0][0], "conda-create")
 
+    def test_base_conda_warning_discourages_polluting_base(self):
+        installer = load_script_module()
+
+        warning = installer.conda_env_warning("base")
+
+        self.assertIn("base", warning.lower())
+        self.assertIn("not recommended", warning.lower())
+        self.assertIn("new conda environment", warning.lower())
+
+    def test_command_path_uses_selected_python_bin_directory(self):
+        installer = load_script_module()
+
+        command = installer.command_path_for_python(Path("/opt/anaconda3/envs/demo/bin/python"), "conference-report")
+
+        self.assertEqual(command, Path("/opt/anaconda3/envs/demo/bin/conference-report"))
+
+    def test_dependency_check_warning_reports_conflicts_without_claiming_success(self):
+        installer = load_script_module()
+
+        warning = installer.dependency_check_warning("package-a has requirement x, but you have y")
+
+        self.assertIn("dependency conflicts", warning.lower())
+        self.assertIn("package-a", warning)
+
 
 if __name__ == "__main__":
     unittest.main()
