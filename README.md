@@ -66,15 +66,19 @@ Known-compatible pinned versions are listed in `requirements.lock`. Normal users
 
 ## Install
 
-Clone and run the guided installer:
+Clone and run the guided installer. For first-time users this is the recommended path: the installer explains each choice, checks the selected Python environment, and asks before installing optional components.
 
 ```bash
 git clone https://github.com/houyili/conference-report-skill.git
 cd conference-report-skill
-python3 scripts/install.py --with-local-asr
+python3 scripts/install.py
 ```
 
-On macOS, the installer can guide you through Homebrew installation of `ffmpeg` and optional `tesseract`:
+The guided flow can use a project `.venv` (recommended), the current Python environment, or conda when available. It checks whether `faster-whisper` is already installed before suggesting local ASR support, and it can install the bundled skill into a user-selected global agent skills directory.
+
+Command-line flags are available for automation and contributors. For example, `--with-dev` installs development dependencies such as `pytest` for running tests; it is not required for normal report generation.
+
+On macOS, the installer can also guide you through Homebrew installation of `ffmpeg` and optional `tesseract`:
 
 ```bash
 python3 scripts/install.py --with-local-asr --install-system-deps

@@ -14,6 +14,14 @@ Every project change should make the repository easier for an outside user or co
 
 Treat open-source usability as the default design constraint for CLI behavior, skill instructions, installer scripts, examples, tests, and documentation. If a local user-stage test requires machine-specific paths or private access, keep those details outside tracked files and translate only the generalizable finding back into the project.
 
+## Installer UX
+
+The primary first-time install path for normal users is `python3 scripts/install.py`. It must be an interactive guided flow that explains each prompt, the meaning of each choice, and the recommended default. Command-line flags such as `--with-dev`, `--with-local-asr`, and `--no-venv` are for automation, contributors, and advanced users; do not make first-time users discover the right flags by reading source.
+
+Before suggesting heavy optional dependencies, inspect the selected Python environment. For local ASR, check whether `faster-whisper` is already installed, report its version, and run a dependency-conflict check before asking whether to install or repair ASR support. The installer may support `.venv`, the current Python environment, or conda, but it must explain the tradeoff and keep `.venv` as the simple default.
+
+When installing the global skill, discover existing local candidate skill roots from environment variables and existing agent directories, then ask the user to confirm or type another path. The repository must never hardcode a maintainer-specific target directory.
+
 ## Project Structure & Module Organization
 
 `conference_report/` contains the Python package and CLI entry point. Core pipeline modules are split by stage: `ingest.py`, `asr.py`, `slides.py`, `dedupe.py`, `segment.py`, `report.py`, and `validate.py`; shared helpers live in `utils.py`, `config.py`, and `auth.py`. `tests/` holds unit tests. `scripts/` contains installer, upgrade, and validation helpers. `skills/conference-report/` is the canonical source for the bundled cross-agent skill, and `examples/manual_segments/` contains manual segmentation templates. Development-only generated runs may use ignored directories such as `outputs/`; real user output locations are use-stage configuration and must not be hardcoded in the repo.
