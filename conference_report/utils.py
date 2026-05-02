@@ -12,9 +12,11 @@ from typing import Any
 TIME_RE = re.compile(r"\[(\d\d:\d\d:\d\d\.\d\d\d)\]")
 
 
-def run(cmd: list[str], *, check: bool = True, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+def run(cmd: list[str], *, check: bool = True, cwd: Path | None = None, capture: bool = True) -> subprocess.CompletedProcess[str]:
     print("+ " + " ".join(str(part) for part in cmd), flush=True)
-    return subprocess.run(cmd, check=check, cwd=cwd, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if capture:
+        return subprocess.run(cmd, check=check, cwd=cwd, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    return subprocess.run(cmd, check=check, cwd=cwd, text=True)
 
 
 def find_tool(name: str) -> str | None:

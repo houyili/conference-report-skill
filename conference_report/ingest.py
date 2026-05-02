@@ -236,10 +236,8 @@ def download_audio(source: str, out_dir: Path, *, cookies_from_browser: str | No
     if cookies_from_browser:
         cmd.extend(["--cookies-from-browser", cookies_from_browser])
     cmd.append(source)
-    proc = run(cmd, check=False)
+    proc = run(cmd, check=False, capture=False)
     if proc.returncode != 0:
-        print(proc.stdout)
-        print(proc.stderr)
         raise SystemExit("Audio download failed.")
     media = sorted(path for path in audio_dir.iterdir() if path.suffix.lower() in MEDIA_EXTS)
     if not media:
