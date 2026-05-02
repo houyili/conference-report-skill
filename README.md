@@ -76,6 +76,8 @@ On macOS, the installer can guide you through Homebrew installation of `ffmpeg` 
 python3 scripts/install.py --with-local-asr --install-system-deps
 ```
 
+`--install-system-deps` only installs system packages automatically on macOS when Homebrew is available. On Linux and Windows, the installer prints the recommended commands but does not run `apt`, `dnf`, `choco`, or `scoop` for you.
+
 Manual install:
 
 ```bash
@@ -105,6 +107,81 @@ choco install ffmpeg tesseract
 | Windows 10/11 | Expected | Requires Python 3.10+, `ffmpeg` on PATH, and optionally `tesseract`. Key storage uses Windows Credential Manager when available; otherwise use `OPENAI_API_KEY`. |
 
 The CLI searches both the system `PATH` and the active Python environment's script directory, so `yt-dlp` installed into `.venv` is detected even when the shell has not activated the venv.
+
+## Workspace And Outputs
+
+There are two directories to keep in mind:
+
+- **Install directory**: the cloned repository, for example `~/tools/conference-report-skill`. This contains `.venv`, `config.example.yaml`, scripts, and the source checkout.
+- **Run workspace**: the directory passed to `--out`. Every pipeline artifact for one replay is written there.
+
+If `--out` is relative, it is resolved from the shell's current working directory:
+
+```bash
+cd ~/reports/iclr
+~/tools/conference-report-skill/.venv/bin/conference-report build URL \
+  --out outputs/session-demo \
+  --config ~/tools/conference-report-skill/config.example.yaml
+```
+
+This writes the run workspace to `~/reports/iclr/outputs/session-demo`. For reproducibility and easy cleanup, prefer one `--out` directory per replay/session.
+
+## Update
+
+For a source checkout installation:
+
+```bash
+cd conference-report-skill
+git pull
+.venv/bin/python -m pip install -e ".[asr]"
+```
+
+If you installed the Codex skill copy, refresh it after pulling:
+
+```bash
+python3 scripts/install_codex_skill.py
+```
+
+System dependencies update separately:
+
+```bash
+# macOS
+brew upgrade ffmpeg tesseract
+
+# Debian/Ubuntu
+sudo apt-get update && sudo apt-get install --only-upgrade ffmpeg tesseract-ocr
+```
+
+Stored API keys remain in the OS credential store and do not need to be re-entered unless you want to rotate them.
+
+## Uninstall
+
+Remove the stored OpenAI key first if you used the credential helper:
+
+```bash
+cd conference-report-skill
+.venv/bin/conference-report auth delete openai
+```
+
+Then remove the checkout and optional Codex skill copy:
+
+```bash
+cd ..
+rm -rf conference-report-skill
+rm -rf ~/.codex/skills/conference-report
+```
+
+Generated outputs live wherever you passed `--out`; delete those run workspaces separately if you no longer need the raw audio, slides, transcripts, or reports.
+
+Do not uninstall `ffmpeg` or `tesseract` unless you know no other local tools depend on them. If you do want to remove them:
+
+```bash
+# macOS
+brew uninstall ffmpeg tesseract
+
+# Debian/Ubuntu
+sudo apt-get remove ffmpeg tesseract-ocr
+```
 
 ## API Key And Privacy
 
