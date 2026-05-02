@@ -71,6 +71,8 @@ Each run directory should contain:
 
 Use user-authorized browser cookies only via `--cookies-from-browser`; do not export or commit cookies.
 
+Generated `raw/page.html` and `raw/page_dump/*.dump` should be treated as local artifacts. The CLI redacts token-like query parameters, signed URL credentials, chat/user/session attributes, JWT-like strings, and AWS access-key-like strings; if a privacy grep finds unredacted credentials, stop and fix the sanitizer before sharing outputs.
+
 For automated final reports, prefer the CLI credential store:
 
 ```bash
