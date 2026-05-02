@@ -6,6 +6,10 @@ Turn long conference replay URLs or local videos into talk-level Chinese image-t
 
 The project is a reusable CLI plus a Codex/agent skill. It is designed for ICLR virtual pages, SlidesLive pages, YouTube/ordinary video URLs, and local video files. A single replay can contain multiple oral talks, keynotes, panels, Q&A sections, and breaks; the pipeline keeps those separated.
 
+## Open-Source Usability
+
+This project is developed as an open-source tool first. Installers, examples, defaults, and skill instructions should be usable by outside users without maintainer-specific paths, private credentials, or hidden local setup. Local maintainer runs are treated as realistic user acceptance tests; only generalized, privacy-preserving improvements belong in the repository.
+
 ## What It Produces
 
 ```text

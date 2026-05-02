@@ -8,6 +8,12 @@ Keep local use-stage details out of the repository. Do not commit absolute user 
 
 After development, users should run the globally installed skill, not the checkout copy directly. The first deployment to an agent is an install; later deployments after repo changes are upgrades.
 
+## Open-Source Usability Principle
+
+Every project change should make the repository easier for an outside user or contributor to install, inspect, validate, use, debug, or upgrade. Prefer explicit configuration, portable commands, reproducible tests, clear failure messages, and privacy-preserving defaults. Avoid workflows that only work because of a maintainer's machine, shell history, global paths, private credentials, or undocumented agent setup.
+
+Treat open-source usability as the default design constraint for CLI behavior, skill instructions, installer scripts, examples, tests, and documentation. If a local user-stage test requires machine-specific paths or private access, keep those details outside tracked files and translate only the generalizable finding back into the project.
+
 ## Project Structure & Module Organization
 
 `conference_report/` contains the Python package and CLI entry point. Core pipeline modules are split by stage: `ingest.py`, `asr.py`, `slides.py`, `dedupe.py`, `segment.py`, `report.py`, and `validate.py`; shared helpers live in `utils.py`, `config.py`, and `auth.py`. `tests/` holds unit tests. `scripts/` contains installer, upgrade, and validation helpers. `skills/conference-report/` is the canonical source for the bundled cross-agent skill, and `examples/manual_segments/` contains manual segmentation templates. Development-only generated runs may use ignored directories such as `outputs/`; real user output locations are use-stage configuration and must not be hardcoded in the repo.
