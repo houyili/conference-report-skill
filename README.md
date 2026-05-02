@@ -118,13 +118,13 @@ There are two directories to keep in mind:
 If `--out` is relative, it is resolved from the shell's current working directory:
 
 ```bash
-cd ~/reports/iclr
+cd ~/reports/video-course
 ~/tools/conference-report-skill/.venv/bin/conference-report build URL \
   --out outputs/session-demo \
   --config ~/tools/conference-report-skill/config.example.yaml
 ```
 
-This writes the run workspace to `~/reports/iclr/outputs/session-demo`. For reproducibility and easy cleanup, prefer one `--out` directory per replay/session.
+This writes the run workspace to `~/reports/video-course/outputs/session-demo`. For reproducibility and easy cleanup, prefer one `--out` directory per replay/session.
 
 ## Update
 
@@ -136,10 +136,10 @@ git pull
 .venv/bin/python -m pip install -e ".[asr]"
 ```
 
-If you installed the Codex skill copy, refresh it after pulling:
+If you installed a global agent skill copy, refresh it after pulling by passing the agent's skill root explicitly:
 
 ```bash
-python3 scripts/install_codex_skill.py
+python3 scripts/install_agent_skill.py upgrade --target-dir /path/to/agent/skills
 ```
 
 System dependencies update separately:
@@ -163,12 +163,12 @@ cd conference-report-skill
 .venv/bin/conference-report auth delete openai
 ```
 
-Then remove the checkout and optional Codex skill copy:
+Then remove the checkout and any global agent skill copy you installed:
 
 ```bash
 cd ..
 rm -rf conference-report-skill
-rm -rf ~/.codex/skills/conference-report
+rm -rf /path/to/agent/skills/conference-report
 ```
 
 Generated outputs live wherever you passed `--out`; delete those run workspaces separately if you no longer need the raw audio, slides, transcripts, or reports.
@@ -265,15 +265,31 @@ conference-report segment \
 
 Breaks such as coffee, poster sessions, lunch, and registration are retained in segmentation review artifacts but do not generate reports.
 
-## Codex Skill Install
+## Agent Skill Install
 
-To install the bundled skill into Codex:
+To install the bundled skill into an agent host such as Codex, Claude Code, Antigravity, OpenClaw, or another skill-compatible tool, pass that agent's skill root explicitly:
 
 ```bash
-python3 scripts/install_codex_skill.py
+python3 scripts/install_agent_skill.py install --target-dir /path/to/agent/skills
 ```
 
-The skill is intentionally small. User-facing setup and dependency information lives in this README; the skill itself tells Codex how to run the pipeline and how to preserve report quality.
+For multiple agent hosts, repeat `--target-dir`:
+
+```bash
+python3 scripts/install_agent_skill.py install \
+  --target-dir /path/to/first-agent/skills \
+  --target-dir /path/to/second-agent/skills
+```
+
+After changing the source checkout, use `upgrade` instead of `install`:
+
+```bash
+python3 scripts/install_agent_skill.py upgrade --target-dir /path/to/agent/skills
+```
+
+The legacy `scripts/install_codex_skill.py` wrapper is still available for Codex users, but it also requires `--target-dir`; the repository does not infer or hardcode global skill directories.
+
+The skill is intentionally small. User-facing setup and dependency information lives in this README; the skill itself tells agents how to run the pipeline and how to preserve report quality.
 
 ## Development
 
@@ -283,10 +299,16 @@ Run tests:
 .venv/bin/python -m pytest
 ```
 
-Validate the bundled skill if you have Codex's `skill-creator` tools installed:
+Validate the bundled skill if you have a compatible skill validator script:
 
 ```bash
-python3 ~/.codex/skills/.system/skill-creator/scripts/quick_validate.py skills/conference-report
+python3 /path/to/quick_validate.py skills/conference-report
+```
+
+You can also install the repository pre-push hook. It runs the local test suite before push and can run a validator when `CONFERENCE_REPORT_SKILL_VALIDATOR` points to one:
+
+```bash
+python3 scripts/install_git_hooks.py
 ```
 
 ## Current Scope
