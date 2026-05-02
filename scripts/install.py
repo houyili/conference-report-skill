@@ -33,7 +33,14 @@ class SkillRootCandidate:
 
 def run(cmd: list[str], *, env: dict[str, str] | None = None) -> None:
     print("+ " + " ".join(cmd), flush=True)
-    subprocess.check_call(cmd, cwd=ROOT, env=env)
+    try:
+        subprocess.check_call(cmd, cwd=ROOT, env=env)
+    except subprocess.CalledProcessError as exc:
+        command = " ".join(str(part) for part in cmd)
+        hint = ""
+        if "pip" in cmd:
+            hint = " If this happened during pip install, check network access, proxy settings, or use pre-downloaded wheels."
+        raise SystemExit(f"Command failed with exit code {exc.returncode}: {command}.{hint}") from None
 
 
 def venv_python(venv: Path) -> Path:
@@ -122,6 +129,14 @@ def tool_status(name: str, *, extra_path: str | None = None) -> bool:
     path = shutil.which(name, path=extra_path or os.environ.get("PATH"))
     print(f"{name}: {'found at ' + path if path else 'missing'}")
     return bool(path)
+
+
+def missing_required_tool_warning(missing: list[str]) -> str:
+    tools = ", ".join(missing)
+    return (
+        f"Warning: required system tool(s) missing: {tools}. "
+        "The CLI and skill may be installed, but you cannot run the full build pipeline until these are installed."
+    )
 
 
 def print_system_dependency_help() -> None:
@@ -425,9 +440,14 @@ def guided_install(args: argparse.Namespace) -> int:
     print("\nTool check:")
     tool_status("conference-report", extra_path=path)
     tool_status("yt-dlp", extra_path=path)
-    tool_status("ffmpeg")
-    tool_status("ffprobe")
+    missing_required_tools = []
+    if not tool_status("ffmpeg"):
+        missing_required_tools.append("ffmpeg")
+    if not tool_status("ffprobe"):
+        missing_required_tools.append("ffprobe")
     tool_status("tesseract")
+    if missing_required_tools:
+        print("\n" + missing_required_tool_warning(missing_required_tools))
 
     command = Path("conference-report") if install_into_current else venv_command(venv or args.venv, "conference-report")
     print("\nOpenAI API key")
@@ -438,7 +458,10 @@ def guided_install(args: argparse.Namespace) -> int:
 
     prompt_skill_install()
 
-    print("\nDone. Try:")
+    if missing_required_tools:
+        print("\nInstall completed with missing system tools. After installing them, try:")
+    else:
+        print("\nDone. Try:")
     print(f"  {command} build URL --out outputs/run --config config.example.yaml")
     return 0
 

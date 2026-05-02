@@ -78,6 +78,28 @@ class InstallScriptHelperTests(unittest.TestCase):
         self.assertFalse(status.has_conflicts)
         self.assertEqual(run.call_count, 1)
 
+    def test_run_reports_command_failure_without_traceback(self):
+        installer = load_script_module()
+        error = installer.subprocess.CalledProcessError(1, ["python", "-m", "pip", "install", "-e", "."])
+
+        with mock.patch.object(installer.subprocess, "check_call", side_effect=error):
+            with self.assertRaises(SystemExit) as raised:
+                installer.run(["python", "-m", "pip", "install", "-e", "."])
+
+        message = str(raised.exception)
+        self.assertIn("Command failed", message)
+        self.assertIn("pip install", message)
+        self.assertIn("network access", message)
+
+    def test_missing_required_tool_warning_names_tools_and_blocks_build_confidence(self):
+        installer = load_script_module()
+
+        warning = installer.missing_required_tool_warning(["ffmpeg", "ffprobe"])
+
+        self.assertIn("ffmpeg", warning)
+        self.assertIn("ffprobe", warning)
+        self.assertIn("cannot run the full build pipeline", warning.lower())
+
 
 if __name__ == "__main__":
     unittest.main()
