@@ -24,6 +24,14 @@ When conda is used, prefer creating a new environment and strongly discourage in
 
 When installing the global skill, discover existing local candidate skill roots from environment variables and existing agent directories, then ask the user to confirm or type another path. The repository must never hardcode a maintainer-specific target directory.
 
+After installation, distinguish "skill copy installed" from "CLI visible to the agent runtime." The installer should print the selected absolute CLI path and whether the current `PATH` resolves `conference-report` by name. Use-stage skill instructions must stop and explain the PATH/environment problem when the global CLI is not visible; they must not silently fall back to a source checkout or repository `.venv`.
+
+## Uninstaller UX
+
+The primary uninstall path for normal users is `python3 scripts/uninstall.py`. It must be an interactive guided flow that detects likely Python environments and installed global skill copies, explains safe defaults, and asks before removing anything outside the project package and installed skill directories.
+
+Default uninstall behavior should remove this project's Python package and detected global skill copies, but preserve shared packages, stored credentials, generated run workspaces, and shared system tools unless the user explicitly opts in. Never remove `ffmpeg` by default. Offer optional cleanup of project-specific ASR packages only after checking whether other packages still require them.
+
 ## Project Structure & Module Organization
 
 `conference_report/` contains the Python package and CLI entry point. Core pipeline modules are split by stage: `ingest.py`, `asr.py`, `slides.py`, `dedupe.py`, `segment.py`, `report.py`, and `validate.py`; shared helpers live in `utils.py`, `config.py`, and `auth.py`. `tests/` holds unit tests. `scripts/` contains installer, upgrade, and validation helpers. `skills/conference-report/` is the canonical source for the bundled cross-agent skill, and `examples/manual_segments/` contains manual segmentation templates. Development-only generated runs may use ignored directories such as `outputs/`; real user output locations are use-stage configuration and must not be hardcoded in the repo.
@@ -50,6 +58,7 @@ Never infer or hardcode global skill directories in repository code or docs. Pla
 - `.venv/bin/conference-report build URL --out outputs/run --config config.example.yaml`: run the full pipeline locally.
 - `python3 scripts/install_agent_skill.py install --target-dir <agent-skills-root>`: first-time install of the bundled skill into a user-selected global skill directory.
 - `python3 scripts/install_agent_skill.py upgrade --target-dir <agent-skills-root>`: refresh an existing global skill copy after development changes.
+- `python3 scripts/uninstall.py`: guided removal of installed Python packages and global skill copies with conservative defaults.
 - `python3 scripts/install_git_hooks.py`: install the optional repository pre-push hook. Set `CONFERENCE_REPORT_SKILL_VALIDATOR=/path/to/quick_validate.py` to add skill validation before push.
 
 ## Coding Style & Naming Conventions

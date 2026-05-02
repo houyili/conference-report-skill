@@ -76,6 +76,8 @@ python3 scripts/install.py
 
 The guided flow can use a project `.venv` (recommended), the current Python environment, or conda when available. If using conda, create a new environment rather than installing into `base`. The installer checks whether `faster-whisper` is already installed before suggesting local ASR support, runs `pip check` after package installation, and can install the bundled skill into a user-selected global agent skills directory.
 
+Installing the agent skill and making the CLI visible are separate steps. The skill tells an agent how to run the workflow, but the agent's shell still needs to find `conference-report` on `PATH`. At the end of the guided install, read the "Agent runtime check": it prints the absolute CLI path and warns if the current shell cannot resolve `conference-report` by name. Conda users should be especially careful because an interactive terminal may activate an environment that Codex, Claude Code, Antigravity, OpenClaw, or another non-interactive agent shell does not inherit.
+
 Command-line flags are available for automation and contributors. For example, `--with-dev` installs development dependencies such as `pytest` for running tests; it is not required for normal report generation.
 
 On macOS, the installer can also guide you through Homebrew installation of `ffmpeg` and optional `tesseract`:
@@ -123,6 +125,8 @@ There are two directories to keep in mind:
 - **Install directory**: the cloned repository, for example `~/tools/conference-report-skill`. This contains `.venv`, `config.example.yaml`, scripts, and the source checkout.
 - **Run workspace**: the directory passed to `--out`. Every pipeline artifact for one replay is written there.
 
+For normal use through an installed agent skill, use the installed `conference-report` CLI. Do not rely on running `python -m conference_report.cli` from the checkout; that form is for contributor debugging and can hide PATH or upgrade problems in the globally installed skill.
+
 If `--out` is relative, it is resolved from the shell's current working directory:
 
 ```bash
@@ -164,24 +168,37 @@ Stored API keys remain in the OS credential store and do not need to be re-enter
 
 ## Uninstall
 
-Remove the stored OpenAI key first if you used the credential helper:
+Run the guided uninstaller from the checkout. This is the recommended path for normal users because it detects the Python environment, installed global agent skill copies, optional ASR packages, and Homebrew `tesseract`, then asks before removing each item:
 
 ```bash
 cd conference-report-skill
-.venv/bin/conference-report auth delete openai
+python3 scripts/uninstall.py
 ```
 
-Then remove the checkout and any global agent skill copy you installed:
+Safe defaults remove the `conference-report` Python package and detected global skill copies, while keeping shared packages such as `openai`, `keyring`, and `yt-dlp`, keeping stored OpenAI credentials unless you explicitly delete them, and never removing `ffmpeg` by default. Preview the flow without deleting anything:
+
+```bash
+python3 scripts/uninstall.py --dry-run
+```
+
+After the uninstaller finishes, remove the source checkout if you no longer want to keep it:
 
 ```bash
 cd ..
 rm -rf conference-report-skill
-rm -rf /path/to/agent/skills/conference-report
 ```
 
 Generated outputs live wherever you passed `--out`; delete those run workspaces separately if you no longer need the raw audio, slides, transcripts, or reports.
 
-Do not uninstall `ffmpeg` or `tesseract` unless you know no other local tools depend on them. If you do want to remove them:
+Manual fallback, if the guided script is unavailable. Use the same Python environment you installed into:
+
+```bash
+conference-report auth delete openai
+python3 -m pip uninstall conference-report faster-whisper
+rm -rf /path/to/agent/skills/conference-report
+```
+
+Do not uninstall shared system tools unless you know no other local tools depend on them. If you do want to remove them:
 
 ```bash
 # macOS

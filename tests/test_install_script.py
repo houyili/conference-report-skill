@@ -1,4 +1,5 @@
 import importlib.util
+import io
 import sys
 import tempfile
 import unittest
@@ -147,6 +148,48 @@ class InstallScriptHelperTests(unittest.TestCase):
 
         self.assertIn("dependency conflicts", warning.lower())
         self.assertIn("package-a", warning)
+
+    def test_agent_runtime_check_warns_when_cli_is_not_on_current_path(self):
+        installer = load_script_module()
+        command = Path("/env/bin/conference-report")
+
+        with mock.patch.object(installer.shutil, "which", return_value=None):
+            with mock.patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                visible = installer.print_agent_runtime_check(command, env_path="/usr/bin")
+
+        self.assertFalse(visible)
+        output = stdout.getvalue()
+        self.assertIn("Current PATH does not find conference-report", output)
+        self.assertIn("agent runtime PATH", output)
+        self.assertIn(str(command), output)
+
+    def test_agent_runtime_check_accepts_cli_visible_on_current_path(self):
+        installer = load_script_module()
+        command = Path("/env/bin/conference-report")
+
+        with mock.patch.object(installer.shutil, "which", return_value=str(command)):
+            with mock.patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                visible = installer.print_agent_runtime_check(command, env_path="/env/bin")
+
+        self.assertTrue(visible)
+        output = stdout.getvalue()
+        self.assertIn("Current PATH resolves conference-report to this installed CLI", output)
+
+    def test_try_commands_recommend_plain_command_only_when_cli_is_visible(self):
+        installer = load_script_module()
+        command = Path("/env/bin/conference-report")
+
+        with mock.patch("sys.stdout", new_callable=io.StringIO) as stdout:
+            installer.print_try_commands(command, cli_visible=True)
+        visible_output = stdout.getvalue()
+        self.assertIn("conference-report build URL", visible_output)
+        self.assertIn(str(command), visible_output)
+
+        with mock.patch("sys.stdout", new_callable=io.StringIO) as stdout:
+            installer.print_try_commands(command, cli_visible=False)
+        hidden_output = stdout.getvalue()
+        self.assertNotIn("\n  conference-report build URL", hidden_output)
+        self.assertIn(str(command), hidden_output)
 
 
 if __name__ == "__main__":

@@ -9,7 +9,18 @@ Use this skill for long conference replays that may contain multiple oral talks,
 
 ## Quick Start
 
-Prefer the installed CLI:
+Use-stage runs must use the globally installed CLI, not a source checkout fallback.
+
+First confirm the agent runtime can see the CLI:
+
+```bash
+command -v conference-report
+conference-report --help
+```
+
+If `conference-report` is not found, stop and tell the user the CLI is not visible to this agent shell. Ask them to restart the agent session, expose the Python environment's script directory on the agent runtime `PATH`, or verify the absolute CLI path printed by the installer. Do not silently fall back to `python -m conference_report.cli` or a repository `.venv` during normal use.
+
+Then run:
 
 ```bash
 conference-report build "$URL" \
@@ -18,7 +29,7 @@ conference-report build "$URL" \
   --cookies-from-browser chrome
 ```
 
-If working from a source checkout:
+Developer-only source checkout debugging may use the package module form, but this is not a use-stage path:
 
 ```bash
 python -m conference_report.cli build "$URL" \

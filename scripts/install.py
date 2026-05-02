@@ -131,6 +131,42 @@ def tool_status(name: str, *, extra_path: str | None = None) -> bool:
     return bool(path)
 
 
+def command_visible_on_path(command: Path, *, env_path: str | None = None) -> tuple[bool, str | None]:
+    found = shutil.which(command.name, path=env_path or os.environ.get("PATH"))
+    if not found:
+        return False, None
+    return Path(found).resolve() == command.resolve(), found
+
+
+def print_agent_runtime_check(command: Path, *, env_path: str | None = None) -> bool:
+    visible, found = command_visible_on_path(command, env_path=env_path)
+    print("\nAgent runtime check:")
+    print(f"- Installed CLI path: {command}")
+    if visible:
+        print("- Current PATH resolves conference-report to this installed CLI.")
+        return True
+    if found:
+        print(f"- Current PATH resolves conference-report to {found}, not this install.")
+    else:
+        print("- Current PATH does not find conference-report.")
+    print(
+        "- Agent shells may not load the same conda, venv, or login-shell PATH as your terminal. "
+        "Restart the agent session or expose this CLI directory on the agent runtime PATH before expecting a skill to run it by name."
+    )
+    return False
+
+
+def print_try_commands(command: Path, *, cli_visible: bool, missing_required_tools: list[str] | None = None) -> None:
+    prefix = "Install completed with missing system tools. After installing them, try:" if missing_required_tools else "Done. Try:"
+    print(f"\n{prefix}")
+    if cli_visible:
+        print("  conference-report build URL --out outputs/run --config config.example.yaml")
+        print("  # Equivalent absolute CLI path:")
+    else:
+        print("  # Absolute CLI path for this install:")
+    print(f"  {command} build URL --out outputs/run --config config.example.yaml")
+
+
 def missing_required_tool_warning(missing: list[str]) -> str:
     tools = ", ".join(missing)
     return (
@@ -536,12 +572,8 @@ def guided_install(args: argparse.Namespace) -> int:
         run([str(command), "auth", "set", "openai"])
 
     prompt_skill_install()
-
-    if missing_required_tools:
-        print("\nInstall completed with missing system tools. After installing them, try:")
-    else:
-        print("\nDone. Try:")
-    print(f"  {command} build URL --out outputs/run --config config.example.yaml")
+    cli_visible = print_agent_runtime_check(command)
+    print_try_commands(command, cli_visible=cli_visible, missing_required_tools=missing_required_tools)
     return 0
 
 
@@ -589,17 +621,14 @@ def main() -> int:
     tool_status("ffprobe")
     tool_status("tesseract")
 
-    command = venv_command(args.venv, "conference-report") if not args.no_venv else Path("conference-report")
+    command = venv_command(args.venv, "conference-report") if not args.no_venv else command_path_for_python(Path(sys.executable), "conference-report")
     if not args.skip_key:
         status = subprocess.run([str(command), "auth", "status", "openai"], cwd=ROOT)
         if status.returncode != 0 and yes("Store an OpenAI API key in your system credential store now?"):
             run([str(command), "auth", "set", "openai"])
 
-    print("\nDone. Try:")
-    if args.no_venv:
-        print("  conference-report build URL --out outputs/run --config config.example.yaml")
-    else:
-        print(f"  {command} build URL --out outputs/run --config config.example.yaml")
+    cli_visible = print_agent_runtime_check(command)
+    print_try_commands(command, cli_visible=cli_visible)
     return 0
 
 
