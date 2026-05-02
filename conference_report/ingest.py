@@ -11,6 +11,36 @@ from .utils import ensure_dir, require_tool, run, slugify, write_json
 
 
 MEDIA_EXTS = {".mp4", ".mkv", ".webm", ".mov", ".m4v", ".m4a", ".mp3", ".opus", ".wav", ".aac"}
+SENSITIVE_QUERY_KEYS = (
+    "player_token",
+    "token",
+    "access_token",
+    "session_token",
+    "analytics_session_token",
+    "api_key",
+    "apikey",
+    "key",
+    "signature",
+    "x-amz-signature",
+    "x-amz-credential",
+    "x-amz-security-token",
+    "x-amz-policy",
+    "policy",
+    "key-pair-id",
+)
+SENSITIVE_ATTRS = (
+    "data-token",
+    "data-player-token",
+    "data-analytics-session-token",
+    "data-analytics-user-uuid",
+    "data-analytics-session-uuid",
+    "data-api-key",
+    "data-uid",
+    "data-user-id",
+    "data-session-token",
+)
+JWT_RE = re.compile(r"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}")
+AWS_ACCESS_KEY_RE = re.compile(r"\b(?:AKIA|ASIA)[A-Z0-9]{12,}\b")
 
 
 def save_public_page(url: str, raw_dir: Path) -> Path | None:
@@ -61,6 +91,45 @@ def promote_best_page_dump(source: str, raw_dir: Path, dump_dir: Path) -> Path |
     target = raw_dir / "page.html"
     shutil.copy2(best, target)
     return target
+
+
+def redact_sensitive_text(text: str) -> str:
+    query_pattern = re.compile(
+        r"((?:[?&]|&amp;|\\u0026)(" + "|".join(re.escape(key) for key in SENSITIVE_QUERY_KEYS) + r")=)([^&\"'<>\s\\]+)",
+        flags=re.IGNORECASE,
+    )
+    attr_pattern = re.compile(
+        r"(\b(?:" + "|".join(re.escape(attr) for attr in SENSITIVE_ATTRS) + r")\s*=\s*['\"])([^'\"]+)(['\"])",
+        flags=re.IGNORECASE,
+    )
+    text = attr_pattern.sub(r"\1REDACTED\3", text)
+    text = query_pattern.sub(r"\1REDACTED", text)
+    text = JWT_RE.sub("REDACTED_JWT", text)
+    text = AWS_ACCESS_KEY_RE.sub("REDACTED_AWS_ACCESS_KEY", text)
+    return text
+
+
+def redact_text_file(path: Path) -> bool:
+    try:
+        original = path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return False
+    redacted = redact_sensitive_text(original)
+    if redacted == original:
+        return False
+    path.write_text(redacted, encoding="utf-8")
+    return True
+
+
+def redact_html_artifacts(raw_dir: Path, dump_dir: Path) -> int:
+    candidates = [raw_dir / "page.html"]
+    if dump_dir.exists():
+        candidates.extend(sorted(path for path in dump_dir.glob("*.dump") if path.is_file()))
+    redacted = 0
+    for path in candidates:
+        if path.exists() and redact_text_file(path):
+            redacted += 1
+    return redacted
 
 
 def sanitize_page_dump_filenames(dump_dir: Path) -> int:
@@ -130,6 +199,7 @@ def ingest(source: str, out_dir: Path, *, cookies_from_browser: str | None = Non
 
     promoted = promote_best_page_dump(source, raw_dir, page_dump_dir)
     sanitized_dumps = sanitize_page_dump_filenames(page_dump_dir)
+    redacted_files = redact_html_artifacts(raw_dir, page_dump_dir)
     info_files = sorted(info_dir.glob("*.info.json"))
     if not info_files:
         raise SystemExit("No metadata was extracted. The page may require login/registration cookies.")
@@ -142,6 +212,7 @@ def ingest(source: str, out_dir: Path, *, cookies_from_browser: str | None = Non
         manifest["page_html"] = str(promoted.resolve())
         manifest["page_dump_dir"] = str(page_dump_dir.resolve())
         manifest["page_dump_files_sanitized"] = sanitized_dumps
+        manifest["html_files_redacted"] = redacted_files
     write_json(raw_dir / "ingest_manifest.json", manifest)
     return manifest
 

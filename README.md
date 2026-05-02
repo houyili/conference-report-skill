@@ -130,7 +130,7 @@ Credential lookup order is:
 
 The repository does not require or store private API keys in files. `.env`, cookies, raw media, screenshots, subtitles, transcripts, and generated outputs are ignored by git.
 
-Page dumps created by `yt-dlp --write-pages` are renamed to neutral `page-0001.dump` style filenames after extraction so transient tokens or signed URL query strings are not preserved in generated filenames.
+Page dumps created by `yt-dlp --write-pages` are renamed to neutral `page-0001.dump` style filenames after extraction. The tool also redacts token-like query parameters, signed URL fields, chat/user/session attributes, JWT-like strings, and AWS access-key-like strings from `raw/page.html` and `raw/page_dump/*.dump`.
 
 For restricted conference pages, use browser cookies only when you are authorized to access the content:
 

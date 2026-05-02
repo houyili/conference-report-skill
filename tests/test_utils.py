@@ -6,7 +6,7 @@ from unittest import mock
 
 from conference_report.asr import vtt_to_rows
 from conference_report.config import DEFAULT_CONFIG
-from conference_report.ingest import sanitize_page_dump_filenames
+from conference_report.ingest import redact_sensitive_text, sanitize_page_dump_filenames
 from conference_report.report import low_information_reason
 from conference_report.segment import aligned_talks, load_manual_segments
 from conference_report.utils import format_time, parse_time_seconds, require_tool, write_json
@@ -65,6 +65,23 @@ class IngestPrivacyTests(unittest.TestCase):
             self.assertEqual(renamed, 2)
             self.assertEqual(names, ["page-0001.dump", "page-0002.dump"])
             self.assertFalse(any("token" in name or "slideslive" in name for name in names))
+
+    def test_page_dump_content_is_redacted(self):
+        html = (
+            '<div class="track-schedule-card" data-token="secret.jwt.value" data-uid="private-user" '
+            'data-api-key="abc123" data-player-token="eyJabc.def.ghi"></div>'
+            'https://example.test/player?player_' 'token=secret-token&X-Amz-Signature=secret-sig'
+            '&X-Amz-Credential=AKIAABCDEFGHIJKLMNOP%2Fdate'
+            ' eyJhbGciOiJIUzI1NiJ9.eyJ1c2VyIjoicHJpdmF0ZSJ9.signaturepart'
+        )
+        redacted = redact_sensitive_text(html)
+        self.assertIn("track-schedule-card", redacted)
+        self.assertNotIn("secret-token", redacted)
+        self.assertNotIn("secret-sig", redacted)
+        self.assertNotIn("private-user", redacted)
+        self.assertNotIn("abc123", redacted)
+        self.assertNotIn("AKIAABCDEFGHIJKLMNOP", redacted)
+        self.assertNotIn("eyJhbGciOiJIUzI1NiJ9", redacted)
 
 
 class ManualSegmentTests(unittest.TestCase):
