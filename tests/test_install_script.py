@@ -201,6 +201,19 @@ class InstallScriptHelperTests(unittest.TestCase):
         self.assertEqual(code, 130)
         self.assertIn("Installation cancelled.", stdout.getvalue())
 
+    def test_optional_key_setup_failure_warns_and_continues(self):
+        installer = load_script_module()
+        status = mock.Mock(returncode=1)
+
+        with mock.patch.object(installer.subprocess, "run", return_value=status):
+            with mock.patch.object(installer, "yes", return_value=True):
+                with mock.patch.object(installer, "run", side_effect=SystemExit("auth failed")):
+                    with mock.patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                        stored = installer.maybe_store_openai_key(Path("/env/bin/conference-report"))
+
+        self.assertFalse(stored)
+        self.assertIn("OpenAI API key was not stored", stdout.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

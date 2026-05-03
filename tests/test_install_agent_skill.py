@@ -38,6 +38,23 @@ class InstallAgentSkillTests(unittest.TestCase):
             self.assertEqual((target / "SKILL.md").read_text(encoding="utf-8"), "---\nname: conference-report\n---\n")
             self.assertTrue((target / "agents" / "openai.yaml").exists())
 
+    def test_install_records_user_local_cli_path_when_provided(self):
+        installer = load_script_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = self.make_skill_source(root)
+            target_root = root / "agent-skills"
+            cli = root / "env" / "bin" / "conference-report"
+
+            installer.install_skill(source, [target_root], "conference-report", upgrade=False, cli_path=cli)
+
+            target = target_root / "conference-report"
+            self.assertEqual(
+                (target / ".local" / "cli-path.txt").read_text(encoding="utf-8"),
+                f"{cli.resolve(strict=False)}\n",
+            )
+            self.assertFalse((source / ".local").exists())
+
     def test_install_refuses_to_overwrite_existing_skill(self):
         installer = load_script_module()
         with tempfile.TemporaryDirectory() as tmp:

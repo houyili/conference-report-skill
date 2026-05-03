@@ -167,6 +167,20 @@ def print_try_commands(command: Path, *, cli_visible: bool, missing_required_too
     print(f"  {command} build URL --out outputs/run --config config.example.yaml")
 
 
+def maybe_store_openai_key(command: Path, *, default: bool = False) -> bool:
+    status = subprocess.run([str(command), "auth", "status", "openai"], cwd=ROOT)
+    if status.returncode == 0:
+        return True
+    if not yes("Store an OpenAI API key in your system credential store now?", default=default):
+        return False
+    try:
+        run([str(command), "auth", "set", "openai"])
+    except SystemExit as exc:
+        print(f"\nOpenAI API key was not stored: {exc}")
+        return False
+    return True
+
+
 def missing_required_tool_warning(missing: list[str]) -> str:
     tools = ", ".join(missing)
     return (
@@ -462,7 +476,7 @@ def maybe_install_system_deps() -> None:
         run(["brew", "install", *packages])
 
 
-def prompt_skill_install() -> None:
+def prompt_skill_install(command: Path) -> None:
     print("\nGlobal agent skill install")
     print("The CLI is installed in this Python environment. The skill must be copied into each agent's global skills root.")
     print("The installer can suggest existing local roots, but you choose the target.")
@@ -491,13 +505,20 @@ def prompt_skill_install() -> None:
         print("No skill target selected; skipping global skill install.")
         return
 
-    from install_agent_skill import DEFAULT_SKILL_NAME, default_source, install_skill
+    from install_agent_skill import CLI_PATH_FILE, DEFAULT_SKILL_NAME, LOCAL_CONFIG_DIR, default_source, install_skill
 
     upgrade = (target / DEFAULT_SKILL_NAME).exists()
     if upgrade:
         print(f"{target / DEFAULT_SKILL_NAME} already exists; this will upgrade it.")
-    installed = install_skill(default_source(DEFAULT_SKILL_NAME), [target], DEFAULT_SKILL_NAME, upgrade=upgrade)
+    installed = install_skill(
+        default_source(DEFAULT_SKILL_NAME),
+        [target],
+        DEFAULT_SKILL_NAME,
+        upgrade=upgrade,
+        cli_path=command,
+    )
     print(f"{'Upgraded' if upgrade else 'Installed'} skill to {installed[0]}")
+    print(f"Recorded CLI path for agent runtimes at {installed[0] / LOCAL_CONFIG_DIR / CLI_PATH_FILE}")
 
 
 def editable_spec(with_local_asr: bool, with_dev: bool) -> str:
@@ -567,11 +588,9 @@ def guided_install(args: argparse.Namespace) -> int:
 
     print("\nOpenAI API key")
     print("Without a key, the report step can still emit evidence bundles instead of final automated reports.")
-    status = subprocess.run([str(command), "auth", "status", "openai"], cwd=ROOT)
-    if status.returncode != 0 and yes("Store an OpenAI API key in your system credential store now?", default=False):
-        run([str(command), "auth", "set", "openai"])
+    maybe_store_openai_key(command, default=False)
 
-    prompt_skill_install()
+    prompt_skill_install(command)
     cli_visible = print_agent_runtime_check(command)
     print_try_commands(command, cli_visible=cli_visible, missing_required_tools=missing_required_tools)
     return 0
@@ -623,9 +642,7 @@ def main() -> int:
 
     command = venv_command(args.venv, "conference-report") if not args.no_venv else command_path_for_python(Path(sys.executable), "conference-report")
     if not args.skip_key:
-        status = subprocess.run([str(command), "auth", "status", "openai"], cwd=ROOT)
-        if status.returncode != 0 and yes("Store an OpenAI API key in your system credential store now?"):
-            run([str(command), "auth", "set", "openai"])
+        maybe_store_openai_key(command)
 
     cli_visible = print_agent_runtime_check(command)
     print_try_commands(command, cli_visible=cli_visible)

@@ -80,13 +80,17 @@ def parse_pip_show(name: str, text: str) -> PackageInfo:
 
 
 def inspect_package(python: Path, name: str) -> PackageInfo:
-    proc = subprocess.run(
-        [str(python), "-m", "pip", "show", name],
-        cwd=ROOT,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
+    try:
+        proc = subprocess.run(
+            [str(python), "-m", "pip", "show", name],
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except OSError as exc:
+        print(f"Could not inspect Python environment at {python}: {exc}")
+        return PackageInfo(name=name, installed=False, required_by=[])
     if proc.returncode != 0:
         return PackageInfo(name=name, installed=False, required_by=[])
     return parse_pip_show(name, proc.stdout)
@@ -184,21 +188,31 @@ def command_python(command_name: str = "conference-report") -> Path | None:
     return python if python.exists() else Path(sys.executable)
 
 
-def common_python_candidates() -> list[Path]:
+def dedupe_existing_paths(paths: list[Path | None]) -> list[Path]:
     candidates: list[Path] = []
-    for path in [
+    seen: set[Path] = set()
+    for path in paths:
+        if not path or not path.exists():
+            continue
+        resolved = path.resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        candidates.append(path)
+    return candidates
+
+
+def common_python_candidates() -> list[Path]:
+    return dedupe_existing_paths([
         command_python(),
         ROOT / ".venv" / ("Scripts/python.exe" if platform.system() == "Windows" else "bin/python"),
         Path("/opt/anaconda3/bin/python"),
         Path("/opt/miniconda3/bin/python"),
         Path(sys.executable),
-    ]:
-        if path and path.exists() and path not in candidates:
-            candidates.append(path)
-    return candidates
+    ])
 
 
-def select_python() -> Path:
+def select_python() -> Path | None:
     candidates = []
     for path in common_python_candidates():
         info = inspect_package(path, "conference-report")
@@ -208,7 +222,7 @@ def select_python() -> Path:
     if not candidates:
         manual = input("No installed conference-report package was detected. Enter Python path to inspect, or leave blank to skip Python package uninstall: ").strip()
         if not manual:
-            return Path("")
+            return None
         return Path(manual).expanduser()
     choice = choose("Python environment to uninstall from", candidates, default=1)
     return Path(choice)
@@ -266,8 +280,8 @@ def guided_uninstall(*, dry_run: bool = False) -> int:
 
     python = select_python()
     packages_to_remove: list[str] = []
-    command = command_for_python(python) if str(python) else Path("")
-    if str(python):
+    command = command_for_python(python) if python is not None else Path("")
+    if python is not None:
         packages = [inspect_package(python, name) for name in PROJECT_PACKAGES + OPTIONAL_ASR_PACKAGES + ASR_HEAVY_DEPENDENCIES + SHARED_PACKAGES]
         defaults = default_package_actions(packages)
         print("\nPython packages")

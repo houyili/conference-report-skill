@@ -24,7 +24,7 @@ When conda is used, prefer creating a new environment and strongly discourage in
 
 When installing the global skill, discover existing local candidate skill roots from environment variables and existing agent directories, then ask the user to confirm or type another path. The repository must never hardcode a maintainer-specific target directory.
 
-After installation, distinguish "skill copy installed" from "CLI visible to the agent runtime." The installer should print the selected absolute CLI path and whether the current `PATH` resolves `conference-report` by name. Use-stage skill instructions must stop and explain the PATH/environment problem when the global CLI is not visible; they must not silently fall back to a source checkout or repository `.venv`.
+After installation, distinguish "skill copy installed" from "CLI visible to the agent runtime." The installer should print the selected absolute CLI path and whether the current `PATH` resolves `conference-report` by name. When installing or upgrading a global skill copy, record the user-local CLI path in that installed copy's `.local/cli-path.txt`; this file is local install metadata and must never be committed to the source skill. Use-stage skill instructions may use `CONFERENCE_REPORT_CLI`, `PATH`, or the installed skill's `.local/cli-path.txt`, but must not silently fall back to a source checkout or repository `.venv`.
 
 ## Uninstaller UX
 

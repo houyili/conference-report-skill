@@ -1,5 +1,6 @@
 import importlib.util
 import io
+import os
 import sys
 import tempfile
 import unittest
@@ -73,6 +74,33 @@ class UninstallScriptTests(unittest.TestCase):
             )
 
             self.assertEqual([item.path for item in installs], [other_skill, codex_skill])
+
+    def test_dedupe_existing_paths_collapses_symlinked_python_aliases(self):
+        uninstaller = load_script_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            real_python = root / "python3.11"
+            real_python.write_text("#!/usr/bin/env python\n", encoding="utf-8")
+            python = root / "python"
+            python3 = root / "python3"
+            try:
+                os.symlink(real_python, python)
+                os.symlink(real_python, python3)
+            except (OSError, NotImplementedError):
+                self.skipTest("symlinks are not available on this platform")
+
+            paths = uninstaller.dedupe_existing_paths([python, python3])
+
+            self.assertEqual(paths, [python])
+
+    def test_select_python_returns_none_when_no_package_and_manual_path_is_blank(self):
+        uninstaller = load_script_module()
+
+        with mock.patch.object(uninstaller, "common_python_candidates", return_value=[]):
+            with mock.patch("builtins.input", return_value=""):
+                python = uninstaller.select_python()
+
+        self.assertIsNone(python)
 
     def test_remove_tree_deletes_skill_directory(self):
         uninstaller = load_script_module()

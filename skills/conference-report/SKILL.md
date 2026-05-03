@@ -11,19 +11,27 @@ Use this skill for long conference replays that may contain multiple oral talks,
 
 Use-stage runs must use the globally installed CLI, not a source checkout fallback.
 
-First confirm the agent runtime can see the CLI:
+Resolve the CLI in this order:
+
+1. If `CONFERENCE_REPORT_CLI` is set, use that absolute path after confirming it runs with `--help`.
+2. Otherwise try `command -v conference-report` and use the command found on `PATH`.
+3. If the agent exposes this installed skill directory, read `<installed-skill-dir>/.local/cli-path.txt` beside this `SKILL.md`; the installer writes the user's local absolute CLI path there when the global skill copy is installed or upgraded.
 
 ```bash
-command -v conference-report
-conference-report --help
+CLI="${CONFERENCE_REPORT_CLI:-$(command -v conference-report 2>/dev/null || true)}"
+# Run this from the installed skill directory, or replace .local/cli-path.txt with its absolute path.
+if [ -z "$CLI" ] && [ -f ".local/cli-path.txt" ]; then
+  CLI="$(cat .local/cli-path.txt)"
+fi
+"$CLI" --help
 ```
 
-If `conference-report` is not found, stop and tell the user the CLI is not visible to this agent shell. Ask them to restart the agent session, expose the Python environment's script directory on the agent runtime `PATH`, or verify the absolute CLI path printed by the installer. Do not silently fall back to `python -m conference_report.cli` or a repository `.venv` during normal use.
+If no CLI path can be resolved, or the resolved command fails `--help`, stop and tell the user the installed CLI is not visible to this agent shell. Ask them to set `CONFERENCE_REPORT_CLI`, restart the agent session, expose the Python environment's script directory on the agent runtime `PATH`, or upgrade the global skill with the installer so `.local/cli-path.txt` is written. Do not silently fall back to `python -m conference_report.cli` or a repository `.venv` during normal use.
 
 Then run:
 
 ```bash
-conference-report build "$URL" \
+"$CLI" build "$URL" \
   --out outputs/<run-name> \
   --config config.example.yaml \
   --cookies-from-browser chrome
