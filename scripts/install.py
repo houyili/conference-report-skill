@@ -632,5 +632,13 @@ def main() -> int:
     return 0
 
 
+def entrypoint() -> int:
+    try:
+        return main()
+    except KeyboardInterrupt:
+        print("\nInstallation cancelled.")
+        return 130
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(entrypoint())

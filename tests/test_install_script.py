@@ -191,6 +191,16 @@ class InstallScriptHelperTests(unittest.TestCase):
         self.assertNotIn("\n  conference-report build URL", hidden_output)
         self.assertIn(str(command), hidden_output)
 
+    def test_entrypoint_turns_keyboard_interrupt_into_clean_cancel_message(self):
+        installer = load_script_module()
+
+        with mock.patch.object(installer, "main", side_effect=KeyboardInterrupt):
+            with mock.patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                code = installer.entrypoint()
+
+        self.assertEqual(code, 130)
+        self.assertIn("Installation cancelled.", stdout.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

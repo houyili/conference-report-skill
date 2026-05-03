@@ -133,6 +133,7 @@ def remove_tree(path: Path, *, dry_run: bool = False) -> None:
         print(f"+ rm -rf {path}")
         return
     shutil.rmtree(path)
+    print(f"Removed {path}")
 
 
 def candidate_skill_installs(home: Path, env: dict[str, str], skill_name: str = SKILL_NAME) -> list[SkillInstall]:
@@ -308,5 +309,13 @@ def main(argv: list[str] | None = None) -> int:
     return guided_uninstall(dry_run=args.dry_run)
 
 
+def entrypoint(argv: list[str] | None = None) -> int:
+    try:
+        return main(argv)
+    except KeyboardInterrupt:
+        print("\nUninstall cancelled.")
+        return 130
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(entrypoint())

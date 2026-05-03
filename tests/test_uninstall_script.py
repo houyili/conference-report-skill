@@ -1,4 +1,5 @@
 import importlib.util
+import io
 import sys
 import tempfile
 import unittest
@@ -80,9 +81,22 @@ class UninstallScriptTests(unittest.TestCase):
             skill.mkdir()
             (skill / "SKILL.md").write_text("name: conference-report\n", encoding="utf-8")
 
-            uninstaller.remove_tree(skill)
+            with mock.patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                uninstaller.remove_tree(skill)
 
             self.assertFalse(skill.exists())
+            self.assertIn("Removed", stdout.getvalue())
+            self.assertIn(str(skill), stdout.getvalue())
+
+    def test_entrypoint_turns_keyboard_interrupt_into_clean_cancel_message(self):
+        uninstaller = load_script_module()
+
+        with mock.patch.object(uninstaller, "main", side_effect=KeyboardInterrupt):
+            with mock.patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                code = uninstaller.entrypoint()
+
+        self.assertEqual(code, 130)
+        self.assertIn("Uninstall cancelled.", stdout.getvalue())
 
     def test_uninstall_packages_runs_pip_uninstall_once(self):
         uninstaller = load_script_module()
