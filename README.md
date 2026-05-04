@@ -35,6 +35,8 @@ agent_qa_tasks.json
 agent_report_tasks.json
 agent_grounding_tasks.json
 agent_task_validation.json
+report_quality_validation.json # quality audit for agent-written reports
+agent_report_revision_tasks.json
 pipeline_state.json          # current agent gate and next validate/resume commands
 reports/<talk_slug>.md       # final Chinese report, or evidence bundle when requested
 reports/<talk_slug>.grounding.json
@@ -49,6 +51,21 @@ Final reports follow this structure:
 - QA, when evidence exists
 
 The report writer is intentionally conservative: it should combine visible PPT content with ASR evidence, keep English technical terms in English, and write `不确定` when the evidence is insufficient. In Codex, Claude Code, Antigravity, and OpenClaw, the installed skill uses the host agent's own subagents for final writing; an OpenAI API key is only needed for pure CLI `--writer openai` mode or OpenAI ASR fallback.
+
+## Quality Gates And Audit
+
+`--writer agent` uses the host agent's LLM/VLM for cognition and writing, but the CLI still owns the gate checks. A report is not complete just because Markdown and JSON files exist. Final validation now includes a deterministic report-quality audit:
+
+```bash
+conference-report validate --out outputs/run --config outputs/run/config.yaml --phase report-quality
+conference-report validate --out outputs/run --config outputs/run/config.yaml --phase final
+```
+
+The quality gate reads `reports_manifest.json`, `agent_slide_cognition_tasks.json`, `agent_qa_tasks.json`, `agent_report_tasks.json`, `agent_grounding_tasks.json`, the per-talk cognition/QA JSON, final Markdown reports, and grounding reviews. It writes `report_quality_validation.json` with per-report metrics and failure reasons.
+
+The gate checks for template repetition, repeated boilerplate sentences, OCR/ASR copy-through, missing v2 slide cognition fields, missing `qa_pairs`, shallow QA fragments, missing claim-level `checked_claims`, missing report sections, broken image links, and whether findings appear to use slide cognition/QA outputs. If quality fails, `reports_manifest.final_reports` stays `false` and the CLI writes `agent_report_revision_tasks.json`. The run pauses at `report_revision`; the agent must rewrite only the failed reports and grounding reviews listed in each revision task's `allowed_write_paths`, then run `validate --phase final` and `resume` again.
+
+This makes the audit trail explicit: evidence and intermediate cognition are preserved, report failures are machine-readable, and agent hosts follow validate → revise → resume rather than guessing the next step from chat context.
 
 ## Dependencies
 

@@ -63,6 +63,14 @@ class ConferenceReportSkillTextTests(unittest.TestCase):
         self.assertIn("skips optional audio preservation", quick_start)
         self.assertNotIn("--config config.example.yaml", quick_start)
 
+    def test_skill_documents_report_quality_and_revision_gate(self):
+        text = SKILL_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("--phase report-quality", text)
+        self.assertIn("report_revision", text)
+        self.assertIn("不要把 OCR/ASR 机械填进报告", text)
+        self.assertIn("validate → revise → resume", text)
+
 
 if __name__ == "__main__":
     unittest.main()

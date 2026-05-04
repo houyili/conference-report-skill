@@ -89,19 +89,37 @@ def write_required_agent_outputs(out: Path, *, report_text: str | None = None) -
                     write_json(
                         path,
                         {
-                            "visible_title": "Method",
-                            "chart_description": "No chart",
-                            "key_terms": ["method"],
-                            "ocr_corrections": [],
-                            "asr_alignment": "aligned",
+                            "visual_summary": "The slide introduces a method page that defines how the comparison protocol is set up.",
+                            "speaker_intent": "The speaker uses this page to explain why the method matters before discussing evaluation.",
+                            "main_claims": ["The method slide establishes the comparison protocol used in the talk."],
+                            "method_details": ["The talk compares models under a shared preparation protocol."],
+                            "experiment_or_result": ["The later evaluation depends on this protocol."],
+                            "numbers_and_entities": ["method", "comparison protocol"],
+                            "asr_corrections": [],
                             "uncertainties": [],
                             "confidence": 0.8,
                         },
                     )
                 elif task["stage"] == "qa_detection":
-                    write_json(path, {"qa_candidates": [], "uncertainties": [], "confidence": 0.7})
+                    write_json(path, {"qa_pairs": [], "uncertainties": ["No reliable QA pair was detected in this short test timeline."], "confidence": 0.7})
                 elif task["stage"] == "grounding_review":
-                    write_json(path, {"grounded": True, "issues": [], "confidence": 0.8})
+                    write_json(
+                        path,
+                        {
+                            "checked_claims": [
+                                {
+                                    "claim": "The method slide establishes the comparison protocol used in the talk.",
+                                    "evidence_refs": ["slide 1", "00:00:01.000"],
+                                    "status": "supported",
+                                }
+                            ],
+                            "unsupported_claims": [],
+                            "missing_coverage": [],
+                            "template_or_style_issues": [],
+                            "requires_revision": False,
+                            "confidence": 0.8,
+                        },
+                    )
     for task in read_json(out / "agent_report_tasks.json"):
         for output in task["output_paths"]:
             path = Path(output)
@@ -109,10 +127,10 @@ def write_required_agent_outputs(out: Path, *, report_text: str | None = None) -
             path.write_text(
                 report_text
                 or "# Talk One\n\n"
-                "## 摘要\n\n总结。\n\n"
-                "## 核心 Findings / Experiments / Insights\n\n发现。\n\n"
+                "## 摘要\n\n这场 talk 的第一张方法页说明，报告后续比较建立在 shared preparation protocol 上。\n\n"
+                "## 核心 Findings / Experiments / Insights\n\n- The method slide establishes the comparison protocol used in the talk, so later evaluation should be read through that protocol.\n\n"
                 "## 逐页 PPT 解读\n\n### 第 1 张 PPT (00:00:00.000 - 00:00:10.000)\n\n解释。\n\n"
-                "## QA\n\n未检测到明确 QA 内容。\n",
+                "## QA\n\n未能可靠形成 QA：No reliable QA pair was detected in this short test timeline.\n",
                 encoding="utf-8",
             )
 

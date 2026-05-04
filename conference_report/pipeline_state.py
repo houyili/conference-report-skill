@@ -39,6 +39,21 @@ GATE_MESSAGES = {
             "验证通过后运行 resume。",
         ],
     },
+    "report_revision": {
+        "label": "report quality revision",
+        "validate_phase": "final",
+        "task_manifests": [
+            "report_quality_validation.json",
+            "agent_report_revision_tasks.json",
+        ],
+        "instructions": [
+            "读取 report_quality_validation.json 和 agent_report_revision_tasks.json。",
+            "只重写 revision task 的 allowed_write_paths 中列出的失败报告和 grounding review。",
+            "不要把 OCR/ASR 机械填进报告；必须修复质量失败原因。",
+            "完成后运行 validate --phase final。",
+            "验证通过后运行 resume。",
+        ],
+    },
 }
 
 

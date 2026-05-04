@@ -8,7 +8,7 @@ from urllib.parse import unquote
 from .utils import read_json, timeline_lines, write_json
 
 
-VALIDATION_PHASES = {"evidence", "dedupe-review", "agent-tasks", "final"}
+VALIDATION_PHASES = {"evidence", "dedupe-review", "agent-tasks", "report-quality", "final"}
 TASK_MANIFESTS = {
     "slide_cognition": "agent_slide_cognition_tasks.json",
     "qa_detection": "agent_qa_tasks.json",
@@ -18,6 +18,38 @@ TASK_MANIFESTS = {
 TASK_REQUIRED_KEYS = {"task_id", "stage", "input_paths", "output_paths", "allowed_write_paths", "validation_rules"}
 REPORT_REQUIRED_SECTIONS = ["摘要", "核心 Findings / Experiments / Insights", "逐页 PPT 解读", "QA"]
 DEDUPE_REVIEW_TASK_MANIFEST = "dedupe/agent_review_tasks.json"
+REPORT_QUALITY_FILE = "report_quality_validation.json"
+REVISION_TASKS_FILE = "agent_report_revision_tasks.json"
+
+
+TEMPLATE_PHRASES = [
+    "综合来看，这页的作用是把可见 PPT 内容和讲者说明对齐起来",
+    "支撑本 talk 的问题动机、方法、实验或结论之一",
+    "若 OCR/ASR 有误，应以截图中的可见文字为优先依据",
+    "这页在报告结构中更像是",
+]
+
+V2_SLIDE_COGNITION_FIELDS = {
+    "visual_summary",
+    "speaker_intent",
+    "main_claims",
+    "method_details",
+    "experiment_or_result",
+    "numbers_and_entities",
+    "asr_corrections",
+    "uncertainties",
+    "confidence",
+}
+
+V2_QA_FIELDS = {"qa_pairs", "uncertainties", "confidence"}
+V2_GROUNDING_FIELDS = {
+    "checked_claims",
+    "unsupported_claims",
+    "missing_coverage",
+    "template_or_style_issues",
+    "requires_revision",
+    "confidence",
+}
 
 
 JSON_SCHEMA_TYPES = {
@@ -63,18 +95,27 @@ def validate_json_schema(path: Path, stage: str) -> list[str]:
         return [f"Invalid JSON task output {path}: {exc}"]
     if stage == "slide_cognition":
         required = {
-            "visible_title": str,
-            "chart_description": str,
-            "key_terms": list,
-            "ocr_corrections": list,
-            "asr_alignment": str,
+            "visual_summary": str,
+            "speaker_intent": str,
+            "main_claims": list,
+            "method_details": list,
+            "experiment_or_result": list,
+            "numbers_and_entities": list,
+            "asr_corrections": list,
             "uncertainties": list,
             "confidence": (int, float),
         }
     elif stage == "qa_detection":
-        required = {"qa_candidates": list, "uncertainties": list, "confidence": (int, float)}
+        required = {"qa_pairs": list, "uncertainties": list, "confidence": (int, float)}
     elif stage == "grounding_review":
-        required = {"grounded": bool, "issues": list, "confidence": (int, float)}
+        required = {
+            "checked_claims": list,
+            "unsupported_claims": list,
+            "missing_coverage": list,
+            "template_or_style_issues": list,
+            "requires_revision": bool,
+            "confidence": (int, float),
+        }
     else:
         return errors
     for key, expected_type in required.items():
@@ -238,6 +279,332 @@ def validate_agent_tasks(out_dir: Path, *, phase: str, errors: list[str]) -> dic
     return result
 
 
+def normalize_text(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip().lower()
+
+
+def sentence_counts(text: str) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for sentence in re.split(r"[。！？.!?\n]+", text):
+        normalized = normalize_text(sentence)
+        if len(normalized) < 28:
+            continue
+        counts[normalized] = counts.get(normalized, 0) + 1
+    return counts
+
+
+def task_output(task: dict[str, Any]) -> Path | None:
+    outputs = task.get("output_paths") or []
+    if not outputs:
+        return None
+    return Path(str(outputs[0]))
+
+
+def tasks_by_stage_and_slug(out_dir: Path, errors: list[str]) -> dict[str, dict[str, list[dict[str, Any]]]]:
+    grouped: dict[str, dict[str, list[dict[str, Any]]]] = {}
+    tasks = load_task_manifests(out_dir, errors, expect_agent=True)
+    for task in tasks:
+        stage = str(task.get("stage", ""))
+        slug = str(task.get("slug", ""))
+        if not slug:
+            continue
+        grouped.setdefault(stage, {}).setdefault(slug, []).append(task)
+    return grouped
+
+
+def validate_cognition_quality(path: Path) -> list[str]:
+    errors: list[str] = []
+    try:
+        data = read_json(path)
+    except Exception as exc:
+        return [f"Invalid slide cognition JSON {path}: {exc}"]
+    missing = sorted(V2_SLIDE_COGNITION_FIELDS - set(data))
+    errors.extend(f"Missing v2 slide cognition field {field} in {path}" for field in missing)
+    if missing:
+        return errors
+    if len(str(data.get("visual_summary", "")).strip()) < 30:
+        errors.append(f"slide cognition visual_summary is too shallow in {path}")
+    if len(str(data.get("speaker_intent", "")).strip()) < 30:
+        errors.append(f"slide cognition speaker_intent is too shallow in {path}")
+    if not data.get("main_claims"):
+        errors.append(f"slide cognition main_claims is empty in {path}")
+    shallow_markers = ["该页可见内容主要是", "对应 ASR 说明", "OCR and ASR summary"]
+    combined = f"{data.get('visual_summary', '')} {data.get('speaker_intent', '')}"
+    if any(marker in combined for marker in shallow_markers):
+        errors.append(f"slide cognition appears to copy OCR/ASR instead of explaining the slide in {path}")
+    return errors
+
+
+def validate_qa_quality(path: Path) -> list[str]:
+    errors: list[str] = []
+    try:
+        data = read_json(path)
+    except Exception as exc:
+        return [f"Invalid QA JSON {path}: {exc}"]
+    missing = sorted(V2_QA_FIELDS - set(data))
+    errors.extend(f"Missing v2 QA field {field} in {path}" for field in missing)
+    if missing:
+        return errors
+    qa_pairs = data.get("qa_pairs") or []
+    if not isinstance(qa_pairs, list):
+        return [f"qa_pairs must be an array in {path}"]
+    required_pair_fields = {"question", "answer", "time_range", "evidence_quotes", "confidence"}
+    for idx, pair in enumerate(qa_pairs, start=1):
+        if not isinstance(pair, dict):
+            errors.append(f"qa_pairs[{idx}] must be an object in {path}")
+            continue
+        pair_missing = sorted(required_pair_fields - set(pair))
+        errors.extend(f"qa_pairs[{idx}] missing {field} in {path}" for field in pair_missing)
+        if len(str(pair.get("question", "")).strip()) < 12:
+            errors.append(f"qa_pairs[{idx}] question is too short in {path}")
+        if len(str(pair.get("answer", "")).strip()) < 12:
+            errors.append(f"qa_pairs[{idx}] answer is too short in {path}")
+    if not qa_pairs:
+        uncertainty_text = " ".join(str(item) for item in data.get("uncertainties", []))
+        if not any(marker in uncertainty_text.lower() for marker in ["no reliable", "未能可靠", "没有可靠", "未检测到"]):
+            errors.append(f"qa_pairs is empty without a no-reliable-QA uncertainty in {path}")
+    return errors
+
+
+def validate_grounding_quality(path: Path) -> list[str]:
+    errors: list[str] = []
+    try:
+        data = read_json(path)
+    except Exception as exc:
+        return [f"Invalid grounding JSON {path}: {exc}"]
+    missing = sorted(V2_GROUNDING_FIELDS - set(data))
+    errors.extend(f"Missing v2 grounding field {field} in {path}" for field in missing)
+    if missing:
+        return errors
+    if not data.get("checked_claims"):
+        errors.append(f"grounding review checked_claims is empty in {path}")
+    if data.get("requires_revision"):
+        errors.append(f"grounding review requires_revision is true in {path}")
+    for field in ["unsupported_claims", "missing_coverage", "template_or_style_issues"]:
+        if data.get(field):
+            errors.append(f"grounding review reports {field} in {path}")
+    return errors
+
+
+def report_template_errors(text: str, slide_count: int) -> tuple[list[str], dict[str, Any]]:
+    errors: list[str] = []
+    phrase_hits = {phrase: text.count(phrase) for phrase in TEMPLATE_PHRASES}
+    total_hits = sum(phrase_hits.values())
+    threshold = max(2, slide_count // 5)
+    if total_hits > threshold:
+        errors.append(f"template repetition detected: {total_hits} stock phrase hits")
+    repeated = {sentence: count for sentence, count in sentence_counts(text).items() if count >= 3}
+    if repeated:
+        sentence, count = next(iter(repeated.items()))
+        errors.append(f"repeated sentence detected {count} times: {sentence[:90]}")
+    return errors, {"template_phrase_hits": phrase_hits, "total_template_hits": total_hits, "repeated_sentence_count": len(repeated)}
+
+
+def report_uses_cognition(text: str, cognition_paths: list[Path]) -> bool:
+    normalized_report = normalize_text(text)
+    for path in cognition_paths:
+        if not path.exists():
+            continue
+        try:
+            data = read_json(path)
+        except Exception:
+            continue
+        for claim in data.get("main_claims", []):
+            claim_text = normalize_text(str(claim))
+            if len(claim_text) >= 24 and claim_text[:80] in normalized_report:
+                return True
+        for entity in data.get("numbers_and_entities", []):
+            entity_text = normalize_text(str(entity))
+            if len(entity_text) >= 5 and entity_text in normalized_report:
+                return True
+    return False
+
+
+def report_uses_qa_pairs(text: str, qa_paths: list[Path]) -> bool:
+    normalized_report = normalize_text(text)
+    found_pairs = False
+    for path in qa_paths:
+        if not path.exists():
+            continue
+        try:
+            data = read_json(path)
+        except Exception:
+            continue
+        for pair in data.get("qa_pairs", []):
+            if not isinstance(pair, dict):
+                continue
+            found_pairs = True
+            question = normalize_text(str(pair.get("question", "")))
+            answer = normalize_text(str(pair.get("answer", "")))
+            if question[:40] in normalized_report or answer[:40] in normalized_report:
+                return True
+    return not found_pairs
+
+
+def normalized_copy_text(text: str) -> str:
+    return re.sub(r"\s+", "", text).lower()
+
+
+def report_task_evidence_path(task: dict[str, Any]) -> Path | None:
+    if task.get("evidence_path"):
+        return Path(str(task["evidence_path"]))
+    for path in task.get("input_paths", []):
+        candidate = Path(str(path))
+        if candidate.name == "evidence.json":
+            return candidate
+    return None
+
+
+def evidence_copy_and_coverage_errors(text: str, evidence_path: Path | None) -> tuple[list[str], dict[str, Any]]:
+    if evidence_path is None or not evidence_path.exists():
+        return [], {}
+    try:
+        evidence = read_json(evidence_path)
+    except Exception:
+        return [], {}
+    if not isinstance(evidence, list):
+        return [], {}
+    errors: list[str] = []
+    metrics: dict[str, Any] = {"expected_slide_count": len(evidence)}
+    heading_numbers = {
+        int(match.group(1))
+        for match in re.finditer(r"^#{2,6}\s*第\s*(\d+)\s*张", text, flags=re.MULTILINE)
+        if match.group(1).isdigit()
+    }
+    metrics["covered_slide_count"] = len(heading_numbers)
+    missing_slides = [idx for idx in range(1, len(evidence) + 1) if idx not in heading_numbers]
+    if missing_slides:
+        errors.append(f"report is missing slide coverage for slide(s): {missing_slides[:5]}")
+    normalized_report = normalized_copy_text(text)
+    copy_hits: list[dict[str, Any]] = []
+    for idx, row in enumerate(evidence, start=1):
+        if not isinstance(row, dict):
+            continue
+        for field in ["ocr_text", "asr_text"]:
+            source = normalized_copy_text(str(row.get(field, "")))
+            if len(source) < 120:
+                continue
+            for start in range(0, len(source), 120):
+                chunk = source[start : start + 120]
+                if len(chunk) >= 90 and chunk in normalized_report:
+                    copy_hits.append({"slide_index": idx, "field": field})
+                    break
+    metrics["evidence_copy_hit_count"] = len(copy_hits)
+    if len(copy_hits) >= max(1, len(evidence) // 4):
+        errors.append(f"report copies long OCR/ASR evidence chunks instead of synthesizing them: {copy_hits[:5]}")
+    return errors, metrics
+
+
+def write_revision_tasks(out_dir: Path, report_results: list[dict[str, Any]], grouped_tasks: dict[str, dict[str, list[dict[str, Any]]]]) -> None:
+    quality_path = (out_dir / REPORT_QUALITY_FILE).resolve()
+    revision_tasks: list[dict[str, Any]] = []
+    grounding_by_slug = grouped_tasks.get("grounding_review", {})
+    report_by_slug = grouped_tasks.get("report_write", {})
+    for result in report_results:
+        if result.get("ok"):
+            continue
+        slug = str(result.get("slug"))
+        report_tasks = report_by_slug.get(slug) or []
+        if not report_tasks:
+            continue
+        report_task = report_tasks[0]
+        grounding_outputs = []
+        for task in grounding_by_slug.get(slug, []):
+            grounding_outputs.extend(task.get("output_paths", []))
+        output_paths = list(report_task.get("output_paths", [])) + grounding_outputs
+        revision_tasks.append(
+            {
+                "task_id": f"report-revision:{slug}",
+                "stage": "report_revision",
+                "slug": slug,
+                "title": report_task.get("title", slug),
+                "input_paths": list(report_task.get("input_paths", [])) + [str(quality_path)],
+                "dependency_output_paths": list(report_task.get("dependency_output_paths", [])),
+                "output_paths": output_paths,
+                "allowed_write_paths": output_paths,
+                "required_sections": report_task.get("required_sections", REPORT_REQUIRED_SECTIONS),
+                "validation_rules": [
+                    {"type": "exists", "paths": "output_paths"},
+                    {"type": "markdown_required_sections", "sections": report_task.get("required_sections", REPORT_REQUIRED_SECTIONS)},
+                    {"type": "report_quality"},
+                    {"type": "allowed_writes"},
+                ],
+                "quality_errors": result.get("errors", [])[:5],
+                "done_condition": "Rewrite only this report and its grounding review, then rerun validate --phase final.",
+            }
+        )
+    write_json(out_dir / REVISION_TASKS_FILE, revision_tasks)
+
+
+def validate_report_quality(out_dir: Path, errors: list[str]) -> dict[str, Any]:
+    initial_error_count = len(errors)
+    reports_manifest_path = out_dir / "reports_manifest.json"
+    reports_manifest = read_json(reports_manifest_path) if reports_manifest_path.exists() else {}
+    if reports_manifest.get("writer_mode") != "agent":
+        result = {"ok": True, "phase": "report-quality", "reports": [], "manifest_errors": []}
+        write_json(out_dir / REPORT_QUALITY_FILE, result)
+        return result
+    grouped = tasks_by_stage_and_slug(out_dir, errors)
+    report_results: list[dict[str, Any]] = []
+    for report_task in [task for tasks in grouped.get("report_write", {}).values() for task in tasks]:
+        slug = str(report_task.get("slug", ""))
+        report_path = Path(str(report_task.get("report_path") or (report_task.get("output_paths") or [""])[0]))
+        report_errors: list[str] = []
+        metrics: dict[str, Any] = {}
+        cognition_paths = [Path(str(output)) for task in grouped.get("slide_cognition", {}).get(slug, []) for output in task.get("output_paths", [])]
+        qa_paths = [Path(str(output)) for task in grouped.get("qa_detection", {}).get(slug, []) for output in task.get("output_paths", [])]
+        grounding_paths = [Path(str(output)) for task in grouped.get("grounding_review", {}).get(slug, []) for output in task.get("output_paths", [])]
+        for path in cognition_paths:
+            report_errors.extend(validate_cognition_quality(path))
+        for path in qa_paths:
+            report_errors.extend(validate_qa_quality(path))
+        for path in grounding_paths:
+            report_errors.extend(validate_grounding_quality(path))
+        if not report_path.exists():
+            report_errors.append(f"Missing report for quality validation: {report_path}")
+        else:
+            text = report_path.read_text(encoding="utf-8", errors="ignore")
+            for section in missing_markdown_sections(report_path, REPORT_REQUIRED_SECTIONS):
+                report_errors.append(f"Missing required section {section} in {report_path}")
+            report_errors.extend(markdown_image_errors(report_path))
+            evidence_errors, evidence_metrics = evidence_copy_and_coverage_errors(text, report_task_evidence_path(report_task))
+            report_errors.extend(evidence_errors)
+            metrics.update(evidence_metrics)
+            template_errors, template_metrics = report_template_errors(text, len(cognition_paths))
+            report_errors.extend(template_errors)
+            metrics.update(template_metrics)
+            if cognition_paths and not report_uses_cognition(text, cognition_paths):
+                report_errors.append(f"report does not appear to use slide_cognition claims for {slug}")
+            if qa_paths and not report_uses_qa_pairs(text, qa_paths):
+                report_errors.append(f"report QA section does not appear to use qa_pairs for {slug}")
+        report_results.append(
+            {
+                "slug": slug,
+                "report_path": str(report_path),
+                "ok": not report_errors,
+                "errors": report_errors,
+                "metrics": metrics,
+            }
+        )
+        errors.extend(report_errors)
+    local_errors = errors[initial_error_count:]
+    ok = not local_errors and not any(not item["ok"] for item in report_results)
+    reports_manifest["final_reports"] = ok and not reports_manifest.get("pending_reports")
+    failed_reports = [item["report_path"] for item in report_results if not item["ok"]]
+    reports_manifest["quality_failed_reports"] = failed_reports
+    if failed_reports:
+        reports_manifest["pending_reports"] = failed_reports
+    elif reports_manifest.get("planned_reports"):
+        reports_manifest["pending_reports"] = []
+        reports_manifest["completed_reports"] = list(reports_manifest.get("planned_reports", []))
+        reports_manifest["reports"] = list(reports_manifest.get("planned_reports", []))
+    write_json(out_dir / "reports_manifest.json", reports_manifest)
+    result = {"ok": ok, "phase": "report-quality", "reports": report_results, "manifest_errors": local_errors}
+    write_json(out_dir / REPORT_QUALITY_FILE, result)
+    write_revision_tasks(out_dir, report_results, grouped)
+    return result
+
+
 def validate_evidence(out_dir: Path, errors: list[str], warnings: list[str]) -> None:
     timeline = out_dir / "asr" / "timeline.txt"
     if not timeline.exists():
@@ -289,6 +656,8 @@ def validate_run(out_dir: Path, phase: str = "evidence") -> dict[str, Any]:
         validate_evidence(out_dir, errors, warnings)
     if phase in {"agent-tasks", "final"}:
         validate_agent_tasks(out_dir, phase=phase, errors=errors)
+    if phase in {"report-quality", "final"}:
+        validate_report_quality(out_dir, errors)
     validate_existing_report_links(out_dir, warnings, strict=phase == "final", errors=errors)
 
     result = {"ok": not errors, "phase": phase, "errors": errors, "warnings": warnings}

@@ -282,7 +282,7 @@ def write_report_writer_prompt(talk_dir: Path, metadata: dict[str, Any], *, skip
 - `evidence.json`: 每页 OCR + 对应 ASR 证据
 - `skipped_slides.json`: 被跳过的低信息量页面，共 {skipped_count} 张
 - `slide_cognition/`: agent/VLM 对每页截图的持久化视觉认知 JSON（如果 host agent 已执行）
-- `qa/qa_candidates.json`: agent 对 QA 片段的候选检测结果（如果 host agent 已执行）
+- `qa/qa_pairs.json`: agent 合并 transcript 后形成的问答对（如果 host agent 已执行）
 
 ## 写作规则
 
@@ -294,6 +294,8 @@ def write_report_writer_prompt(talk_dir: Path, metadata: dict[str, Any], *, skip
 6. 省略 conference logo、空白页、主持人纯转场页，不要在正文中解释这些页面。
 7. 报告结构固定为：摘要、核心 Findings / Experiments / Insights、逐页 PPT 解读、QA。
 8. 逐页章节中保留图片 Markdown、时间范围，并写 1-3 段有信息量的解释。
+9. 如果存在 `slide_cognition/` 和 `qa/qa_pairs.json`，报告必须消费这些文件；不要把 OCR/ASR 机械填进报告。
+10. 每个主要 finding 要能追溯到具体 slide/time/evidence；没有证据的 claim 不要写。
 """
     (talk_dir / "report_writer_prompt.md").write_text(prompt, encoding="utf-8")
 
@@ -382,27 +384,38 @@ def agent_slide_cognition_tasks(talk_dir: Path, metadata: dict[str, Any], eviden
                 "output_paths": [str(output_path)],
                 "allowed_write_paths": [str(output_path)],
                 "required_schema": {
-                    "visible_title": "string",
-                    "chart_description": "string",
-                    "key_terms": "array",
-                    "ocr_corrections": "array",
-                    "asr_alignment": "string",
+                    "visual_summary": "string",
+                    "speaker_intent": "string",
+                    "main_claims": "array",
+                    "method_details": "array",
+                    "experiment_or_result": "array",
+                    "numbers_and_entities": "array",
+                    "asr_corrections": "array",
                     "uncertainties": "array",
                     "confidence": "number",
                 },
+                "instructions": [
+                    "Read the slide image, evidence.json row, metadata, and nearby timeline before writing.",
+                    "If the host has VLM/image understanding, inspect the image directly. If not, say so in uncertainties.",
+                    "Output semantic understanding: visual_summary, speaker_intent, claims, method details, results, numbers/entities.",
+                    "Do not copy OCR/ASR into the JSON as the main answer; use OCR/ASR only as evidence.",
+                ],
                 "validation_rules": [
                     {
                         "type": "json_fields",
                         "required": [
-                            "visible_title",
-                            "chart_description",
-                            "key_terms",
-                            "ocr_corrections",
-                            "asr_alignment",
+                            "visual_summary",
+                            "speaker_intent",
+                            "main_claims",
+                            "method_details",
+                            "experiment_or_result",
+                            "numbers_and_entities",
+                            "asr_corrections",
                             "uncertainties",
                             "confidence",
                         ],
                     },
+                    {"type": "semantic_depth", "rule": "main_claims and speaker_intent must be explanatory, not OCR/ASR copies."},
                     {"type": "allowed_writes"},
                 ],
             }
@@ -411,7 +424,7 @@ def agent_slide_cognition_tasks(talk_dir: Path, metadata: dict[str, Any], eviden
 
 
 def agent_qa_task(talk_dir: Path, metadata: dict[str, Any]) -> dict[str, Any]:
-    output_path = (ensure_dir(talk_dir / "qa") / "qa_candidates.json").resolve()
+    output_path = (ensure_dir(talk_dir / "qa") / "qa_pairs.json").resolve()
     return {
         "task_id": f"qa-detection:{metadata['slug']}",
         "stage": "qa_detection",
@@ -425,19 +438,28 @@ def agent_qa_task(talk_dir: Path, metadata: dict[str, Any]) -> dict[str, Any]:
         "output_paths": [str(output_path)],
         "allowed_write_paths": [str(output_path)],
         "required_schema": {
-            "qa_candidates": "array",
+            "qa_pairs": "array",
             "uncertainties": "array",
             "confidence": "number",
         },
+        "instructions": [
+            "Read the end of timeline.txt and evidence.json, then merge adjacent transcript fragments into real question/answer pairs.",
+            "Each qa_pairs item must include question, answer, time_range, evidence_quotes, and confidence.",
+            "Do not list transcript fragments as QA. If no reliable pair exists, leave qa_pairs empty and explain why in uncertainties.",
+        ],
         "validation_rules": [
-            {"type": "json_fields", "required": ["qa_candidates", "uncertainties", "confidence"]},
+            {"type": "json_fields", "required": ["qa_pairs", "uncertainties", "confidence"]},
+            {"type": "qa_pair_schema", "required": ["question", "answer", "time_range", "evidence_quotes", "confidence"]},
             {"type": "allowed_writes"},
         ],
     }
 
 
-def agent_grounding_task(talk_dir: Path, report_path: Path, metadata: dict[str, Any]) -> dict[str, Any]:
+def agent_grounding_task(talk_dir: Path, report_path: Path, metadata: dict[str, Any], *, dependency_outputs: list[str] | None = None) -> dict[str, Any]:
     output_path = (report_path.parent / f"{metadata['slug']}.grounding.json").resolve()
+    dependencies = [str(report_path.resolve())]
+    if dependency_outputs:
+        dependencies.extend(dependency_outputs)
     return {
         "task_id": f"grounding-review:{metadata['slug']}",
         "stage": "grounding_review",
@@ -447,16 +469,35 @@ def agent_grounding_task(talk_dir: Path, report_path: Path, metadata: dict[str, 
             str((talk_dir / "metadata.json").resolve()),
             str((talk_dir / "evidence.json").resolve()),
         ],
-        "dependency_output_paths": [str(report_path.resolve())],
+        "dependency_output_paths": dependencies,
         "output_paths": [str(output_path)],
         "allowed_write_paths": [str(output_path)],
         "required_schema": {
-            "grounded": "boolean",
-            "issues": "array",
+            "checked_claims": "array",
+            "unsupported_claims": "array",
+            "missing_coverage": "array",
+            "template_or_style_issues": "array",
+            "requires_revision": "boolean",
             "confidence": "number",
         },
+        "instructions": [
+            "Review the report at claim level against evidence.json, slide_cognition outputs, qa_pairs, and images.",
+            "checked_claims must list each important claim with evidence_refs and support status.",
+            "Set requires_revision=true if the report is template-like, unsupported, missing major slide coverage, or misuses QA fragments.",
+        ],
         "validation_rules": [
-            {"type": "json_fields", "required": ["grounded", "issues", "confidence"]},
+            {
+                "type": "json_fields",
+                "required": [
+                    "checked_claims",
+                    "unsupported_claims",
+                    "missing_coverage",
+                    "template_or_style_issues",
+                    "requires_revision",
+                    "confidence",
+                ],
+            },
+            {"type": "claim_level_review"},
             {"type": "allowed_writes"},
         ],
     }
@@ -499,9 +540,17 @@ def agent_report_task(
             {"type": "exists", "paths": "output_paths"},
             {"type": "markdown_required_sections", "sections": REPORT_REQUIRED_SECTIONS},
             {"type": "markdown_image_links_exist"},
+            {"type": "consume_slide_cognition_and_qa_pairs"},
+            {"type": "report_quality"},
             {"type": "allowed_writes"},
         ],
-        "done_condition": "Write exactly one final Markdown report to output_paths[0] after dependency_output_paths exist.",
+        "quality_contract": [
+            "Read every dependency_output_paths item before writing.",
+            "Use slide_cognition main_claims, numbers_and_entities, speaker_intent, and qa_pairs where available.",
+            "Do not use a repeated page template or copy OCR/ASR paragraphs as the report body.",
+            "Each major finding must include or imply a concrete slide/time/evidence anchor.",
+        ],
+        "done_condition": "Write exactly one quality-gated Markdown report to output_paths[0] after dependency_output_paths exist; it must pass validate --phase report-quality.",
     }
 
 
@@ -537,7 +586,12 @@ def generate_talk_report(talk_dir: Path, reports_dir: Path, cfg: dict[str, Any],
         cognition_tasks = agent_slide_cognition_tasks(talk_dir, metadata, evidence)
         qa_task = agent_qa_task(talk_dir, metadata)
         report_task = agent_report_task(talk_dir, report_path, metadata, cognition_tasks=cognition_tasks, qa_task=qa_task)
-        grounding_task = agent_grounding_task(talk_dir, report_path, metadata)
+        grounding_task = agent_grounding_task(
+            talk_dir,
+            report_path,
+            metadata,
+            dependency_outputs=list(report_task["dependency_output_paths"]),
+        )
         return report_path, {
             "slide_cognition": cognition_tasks,
             "qa_detection": [qa_task],

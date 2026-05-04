@@ -77,9 +77,12 @@ Only execute the task manifests named in `pipeline_state.json`. After writing ev
 For report writing, final validation is the gate check:
 
 ```bash
+"$CLI" validate --out "$RUN" --config "$RUN/config.yaml" --phase report-quality
 "$CLI" validate --out "$RUN" --config "$RUN/config.yaml" --phase final
 "$CLI" resume --out "$RUN" --config "$RUN/config.yaml"
 ```
+
+`--phase final` includes `--phase report-quality` for `--writer agent` runs. The separate `report-quality` phase is useful when auditing an existing run before attempting `resume`.
 
 If the CLI refuses a command because the run is blocked, 不要猜下一步. Read `pipeline_state.json`, complete the listed task manifests, run the printed `validate` command, then run the printed `resume` command.
 
@@ -98,7 +101,7 @@ Then read the task manifests from the run directory:
 - `agent_report_tasks.json`
 - `agent_grounding_tasks.json`
 
-The agent host does not decide the workflow. Execute tasks in this order: `slide_cognition`, `qa_detection`, `report_write`, then `grounding_review`. If the host supports subagents, create one subagent per task within the current stage. If the host has no subagent support, execute the tasks sequentially in the same stage order. Do not skip a stage and do not edit any task manifest.
+The agent host does not decide the workflow. Execute tasks in this order: `slide_cognition`, `qa_detection`, `report_write`, then `grounding_review`, then `report-quality` validation, then revision if needed. If the host supports subagents, create one subagent per task within the current stage. If the host has no subagent support, execute the tasks sequentially in the same stage order. Do not skip a stage and do not edit any task manifest.
 
 Every task is self-contained. Give the worker only the JSON task object and its listed files:
 
@@ -111,15 +114,27 @@ Every task is self-contained. Give the worker only the JSON task object and its 
 
 Workers must not edit shared manifests, source files, credentials, cookies, unrelated outputs, or any path not listed in `allowed_write_paths`. Report-writing tasks must write final Markdown reports with the required report structure below.
 
+Agent 的目标是 report quality，不是填完文件。不要把 OCR/ASR 机械填进报告，也不要用脚本批量生成浅层 JSON 来伪装已经理解了 talk。
+
+Quality expectations by stage:
+
+- `slide_cognition`: if the host has VLM/image understanding, inspect the slide image. Write `visual_summary`, `speaker_intent`, `main_claims`, `method_details`, `experiment_or_result`, `numbers_and_entities`, `asr_corrections`, `uncertainties`, and `confidence`. If there is no VLM, rely on OCR/ASR conservatively and put the limitation in `uncertainties`.
+- `qa_detection`: write `qa_pairs`, not transcript fragments. Each pair needs `question`, `answer`, `time_range`, `evidence_quotes`, and `confidence`. If no reliable pair exists, leave `qa_pairs` empty and explain why.
+- `report_write`: read all slide cognition and QA outputs first. Synthesize claims and evidence; do not repeat the same page template.
+- `grounding_review`: review the report claim by claim. `checked_claims` must be non-empty for substantive reports; set `requires_revision: true` for unsupported claims, missing slide coverage, template prose, or QA misuse.
+
 After each stage, the parent agent may rerun the task validation phase. After all stages finish, final validation and resume are mandatory:
 
 ```bash
 "$CLI" validate --out "$RUN" --config "$RUN/config.yaml" --phase agent-tasks
+"$CLI" validate --out "$RUN" --config "$RUN/config.yaml" --phase report-quality
 "$CLI" validate --out "$RUN" --config "$RUN/config.yaml" --phase final
 "$CLI" resume --out "$RUN" --config "$RUN/config.yaml"
 ```
 
-If `--phase final` fails, do not claim final reports are complete. Read `validation.json` and `agent_task_validation.json`, fix only the failed task outputs permitted by `allowed_write_paths`, and rerun final validation.
+If `--phase final` fails quality checks, the CLI writes `report_quality_validation.json`, creates `agent_report_revision_tasks.json`, and blocks at the `report_revision` gate. Follow validate → revise → resume: read the revision tasks, fix only failed reports and grounding reviews listed in `allowed_write_paths`, rerun `validate --phase final`, then run `resume`.
+
+If `--phase final` fails for any reason, do not claim final reports are complete. Read `validation.json`, `agent_task_validation.json`, and `report_quality_validation.json` when present; fix only the failed task outputs permitted by `allowed_write_paths`, and rerun final validation.
 
 ## Pipeline
 
@@ -131,7 +146,7 @@ Run stages in order when debugging:
 4. `dedupe`: preserve originals, cluster repeated slides, record `main_interval` plus `all_intervals`, and optionally stop at a `dedupe-review` gate with local semantic embedding candidates for agent/VLM review.
 5. `segment`: parse the schedule first, align actual talk starts to transcript cues, and skip coffee/poster/lunch/break segments.
 6. `report`: create per-talk evidence and agent writing tasks, or write reports with an explicit writer backend.
-7. `validate`: run `evidence`, `agent-tasks`, or `final` phase checks. Final validation checks task outputs, required report sections, JSON schemas, and Markdown image links.
+7. `validate`: run `evidence`, `agent-tasks`, `report-quality`, or `final` phase checks. Final validation checks task outputs, required report sections, JSON schemas, Markdown image links, report-quality metrics, QA pairs, and claim-level grounding review.
 
 ## Output Contract
 
@@ -151,13 +166,15 @@ Each run directory should contain:
 - `talks/<talk_slug>/`: one material bundle per reportable talk
 - `talks/<talk_slug>/evidence.json`: OCR plus ASR evidence per reportable slide
 - `talks/<talk_slug>/slide_cognition/*.json`: persistent agent/VLM cognition for each slide task
-- `talks/<talk_slug>/qa/qa_candidates.json`: persistent QA detection output
+- `talks/<talk_slug>/qa/qa_pairs.json`: persistent QA pair detection output
 - `talks/<talk_slug>/report_writer_prompt.md`: writer instructions
 - `agent_slide_cognition_tasks.json`: one bounded cognition task per evidence slide when `--writer agent` is used
 - `agent_qa_tasks.json`: one bounded QA detection task per reportable talk/topic
 - `agent_report_tasks.json`: one bounded report-writing task per reportable talk/topic
 - `agent_grounding_tasks.json`: one bounded grounding review task per final report
 - `agent_task_validation.json`: machine-readable status for task contract or final-output validation
+- `report_quality_validation.json`: quality audit for agent-written reports
+- `agent_report_revision_tasks.json`: bounded rewrite tasks created when report quality fails
 - `pipeline_state.json`: current gate, task manifests, next validation command, and resume command when a run is paused
 - `reports/<talk_slug>.md`: final report written by subagents/OpenAI, or clearly marked evidence bundle
 - `reports/<talk_slug>.grounding.json`: persistent grounding review for the final report
@@ -169,6 +186,7 @@ Each run directory should contain:
 - Each slide section must preserve image Markdown and time range, then explain the slide by combining visible PPT content with the matching ASR window.
 - Write Chinese explanatory prose while preserving English technical terms.
 - Stay grounded. If PPT, ASR, or OCR is ambiguous, write `不确定` or `ASR 可能错误`; do not add external paper knowledge.
+- Do not produce template prose. Repeated sentences, OCR/ASR copying, fragment QA, or empty grounding review should fail `validate --phase report-quality`.
 - Skip low-information conference logo, blank, chair-transition, and generic cover pages unless they contain substantive talk-specific content.
 - Repeated slides should appear once with repeated occurrence ranges, not as duplicate sections.
 

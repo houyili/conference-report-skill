@@ -20,7 +20,7 @@ from .report import generate_reports
 from .segment import segment
 from .slides import extract_slides
 from .utils import read_json, write_json
-from .validate import validate_run
+from .validate import REVISION_TASKS_FILE, validate_run
 
 
 WRITER_CHOICES = ["auto", "agent", "openai", "evidence"]
@@ -156,6 +156,60 @@ def pause_for_report_agent(out: Path, args: argparse.Namespace, completed_stages
     print(format_state_for_human(state))
 
 
+def revision_task_manifests(out: Path) -> list[str]:
+    manifests = ["report_quality_validation.json"]
+    if (out / REVISION_TASKS_FILE).exists():
+        manifests.append(REVISION_TASKS_FILE)
+    return manifests
+
+
+def has_revision_tasks(out: Path) -> bool:
+    path = out / REVISION_TASKS_FILE
+    if not path.exists():
+        return False
+    try:
+        tasks = read_json(path)
+    except Exception:
+        return True
+    return isinstance(tasks, list) and len(tasks) > 0
+
+
+def pause_for_report_revision(out: Path, args: argparse.Namespace, completed_stages: list[str], writer: str | None = None) -> dict[str, object]:
+    state = write_waiting_state(
+        out,
+        source=getattr(args, "source", None),
+        completed_stages=completed_stages,
+        blocked_gate="report_revision",
+        config_path=getattr(args, "config", None),
+        writer=writer or getattr(args, "writer", None),
+        manual_segments=getattr(args, "manual_segments", None),
+        agent_gates=getattr(args, "agent_gates_list", []),
+    )
+    state["task_manifests"] = revision_task_manifests(out)
+    quality_path = out / "report_quality_validation.json"
+    quality = read_json(quality_path) if quality_path.exists() else {}
+    failed_reports = [item for item in quality.get("reports", []) if isinstance(item, dict) and not item.get("ok")]
+    if failed_reports:
+        examples: list[str] = []
+        for item in failed_reports[:3]:
+            errors = item.get("errors") or []
+            first_error = str(errors[0]) if errors else "quality check failed"
+            examples.append(f"- {item.get('slug')}: {first_error}")
+        state["human_message"] = "\n".join(
+            [
+                str(state.get("human_message") or ""),
+                "质量检查失败的报告:",
+                *examples,
+            ]
+        ).strip()
+    config_arg = f" --config {state['config_path']}" if state.get("config_path") else ""
+    state["next_allowed_command"] = f"conference-report validate --out {out}{config_arg} --phase final"
+    state["resume_command"] = f"conference-report resume --out {out}{config_arg}"
+    write_json(out / "pipeline_state.json", state)
+    print(format_state_for_human(state))
+    return state
+
+
 def resume_pipeline(out: Path, cfg: dict[str, object], args: argparse.Namespace) -> int:
     state = read_pipeline_state(out)
     if not state:
@@ -216,9 +270,37 @@ def resume_pipeline(out: Path, cfg: dict[str, object], args: argparse.Namespace)
             write_completed_state(out, source=state.get("source"), completed_stages=completed_stages)
             print("Final reports validated. Pipeline completed.")
             return 0
+        if has_revision_tasks(out):
+            completed_stages = list(state.get("completed_stages") or [])
+            if "report_quality" not in completed_stages:
+                completed_stages.append("report_quality")
+            revision_args = argparse.Namespace(
+                source=state.get("source"),
+                config=args.config or (Path(state["config_path"]) if state.get("config_path") else None),
+                manual_segments=Path(state["manual_segments"]) if state.get("manual_segments") else None,
+                agent_gates_list=state.get("agent_gates") or [],
+                writer=state.get("writer"),
+            )
+            pause_for_report_revision(out, revision_args, completed_stages, str(state.get("writer") or "agent"))
+            return 1
         print_validation_feedback(
             validation,
             next_hint="请只修复失败 task 的 allowed_write_paths，然后再次运行 validate --phase final 或 resume。",
+        )
+        return 1
+    if gate == "report_revision":
+        validation = validate_run(out, phase="final")
+        if validation["ok"]:
+            completed_stages = list(state.get("completed_stages") or [])
+            for stage in ["report_revision", "final"]:
+                if stage not in completed_stages:
+                    completed_stages.append(stage)
+            write_completed_state(out, source=state.get("source"), completed_stages=completed_stages)
+            print("Final reports validated after revision. Pipeline completed.")
+            return 0
+        print_validation_feedback(
+            validation,
+            next_hint="请继续修复 agent_report_revision_tasks.json 中失败报告的 allowed_write_paths，然后再次运行 validate --phase final 或 resume。",
         )
         return 1
     print(f"Unsupported blocked gate: {gate}")
@@ -267,7 +349,11 @@ def main(argv: list[str] | None = None) -> int:
         if name == "report":
             add_writer_options(cmd)
         if name == "validate":
-            cmd.add_argument("--phase", choices=["evidence", "dedupe-review", "agent-tasks", "final"], default="evidence")
+            cmd.add_argument(
+                "--phase",
+                choices=["evidence", "dedupe-review", "agent-tasks", "report-quality", "final"],
+                default="evidence",
+            )
 
     args = parser.parse_args(argv)
     if args.cmd == "init-config":
@@ -324,6 +410,17 @@ def main(argv: list[str] | None = None) -> int:
         generate_reports(out, cfg, writer=selected_writer(args))
     elif args.cmd == "validate":
         result = validate_run(out, phase=args.phase)
+        if args.phase in {"report-quality", "final"} and not result["ok"] and has_revision_tasks(out):
+            state = read_pipeline_state(out)
+            if is_waiting(state) and state.get("blocked_gate") in {"report_agent", "report_revision"}:
+                revision_args = argparse.Namespace(
+                    source=state.get("source"),
+                    config=args.config or (Path(state["config_path"]) if state.get("config_path") else None),
+                    manual_segments=Path(state["manual_segments"]) if state.get("manual_segments") else None,
+                    agent_gates_list=state.get("agent_gates") or [],
+                    writer=state.get("writer"),
+                )
+                pause_for_report_revision(out, revision_args, list(state.get("completed_stages") or []), str(state.get("writer") or "agent"))
         print("OK" if result["ok"] else "FAILED")
         return 0 if result["ok"] else 1
     elif args.cmd == "build":
