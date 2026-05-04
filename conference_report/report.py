@@ -13,6 +13,7 @@ from .utils import ensure_dir, find_tool, parse_time_seconds, read_json, write_j
 
 
 WRITER_MODES = {"auto", "agent", "openai", "evidence"}
+REPORT_REQUIRED_SECTIONS = ["摘要", "核心 Findings / Experiments / Insights", "逐页 PPT 解读", "QA"]
 
 BOILERPLATE_TOKENS = {
     "iclr",
@@ -280,6 +281,8 @@ def write_report_writer_prompt(talk_dir: Path, metadata: dict[str, Any], *, skip
 - `slides/`: 每一页代表 PPT 截图
 - `evidence.json`: 每页 OCR + 对应 ASR 证据
 - `skipped_slides.json`: 被跳过的低信息量页面，共 {skipped_count} 张
+- `slide_cognition/`: agent/VLM 对每页截图的持久化视觉认知 JSON（如果 host agent 已执行）
+- `qa/qa_candidates.json`: agent 对 QA 片段的候选检测结果（如果 host agent 已执行）
 
 ## 写作规则
 
@@ -356,8 +359,122 @@ def write_evidence_bundle_report(report_path: Path, metadata: dict[str, Any], ev
     return report_path
 
 
-def agent_report_task(talk_dir: Path, report_path: Path, metadata: dict[str, Any]) -> dict[str, str]:
+def agent_slide_cognition_tasks(talk_dir: Path, metadata: dict[str, Any], evidence: list[dict[str, str]]) -> list[dict[str, Any]]:
+    output_dir = ensure_dir(talk_dir / "slide_cognition")
+    tasks: list[dict[str, Any]] = []
+    for idx, item in enumerate(evidence, start=1):
+        output_path = (output_dir / f"{idx:04d}.json").resolve()
+        image_path = Path(item["image"]).resolve()
+        tasks.append(
+            {
+                "task_id": f"slide-cognition:{metadata['slug']}:{idx:04d}",
+                "stage": "slide_cognition",
+                "slug": str(metadata["slug"]),
+                "title": str(metadata["title"]),
+                "slide_index": idx,
+                "time": item["time"],
+                "input_paths": [
+                    str((talk_dir / "metadata.json").resolve()),
+                    str((talk_dir / "timeline.txt").resolve()),
+                    str((talk_dir / "evidence.json").resolve()),
+                    str(image_path),
+                ],
+                "output_paths": [str(output_path)],
+                "allowed_write_paths": [str(output_path)],
+                "required_schema": {
+                    "visible_title": "string",
+                    "chart_description": "string",
+                    "key_terms": "array",
+                    "ocr_corrections": "array",
+                    "asr_alignment": "string",
+                    "uncertainties": "array",
+                    "confidence": "number",
+                },
+                "validation_rules": [
+                    {
+                        "type": "json_fields",
+                        "required": [
+                            "visible_title",
+                            "chart_description",
+                            "key_terms",
+                            "ocr_corrections",
+                            "asr_alignment",
+                            "uncertainties",
+                            "confidence",
+                        ],
+                    },
+                    {"type": "allowed_writes"},
+                ],
+            }
+        )
+    return tasks
+
+
+def agent_qa_task(talk_dir: Path, metadata: dict[str, Any]) -> dict[str, Any]:
+    output_path = (ensure_dir(talk_dir / "qa") / "qa_candidates.json").resolve()
     return {
+        "task_id": f"qa-detection:{metadata['slug']}",
+        "stage": "qa_detection",
+        "slug": str(metadata["slug"]),
+        "title": str(metadata["title"]),
+        "input_paths": [
+            str((talk_dir / "metadata.json").resolve()),
+            str((talk_dir / "timeline.txt").resolve()),
+            str((talk_dir / "evidence.json").resolve()),
+        ],
+        "output_paths": [str(output_path)],
+        "allowed_write_paths": [str(output_path)],
+        "required_schema": {
+            "qa_candidates": "array",
+            "uncertainties": "array",
+            "confidence": "number",
+        },
+        "validation_rules": [
+            {"type": "json_fields", "required": ["qa_candidates", "uncertainties", "confidence"]},
+            {"type": "allowed_writes"},
+        ],
+    }
+
+
+def agent_grounding_task(talk_dir: Path, report_path: Path, metadata: dict[str, Any]) -> dict[str, Any]:
+    output_path = (report_path.parent / f"{metadata['slug']}.grounding.json").resolve()
+    return {
+        "task_id": f"grounding-review:{metadata['slug']}",
+        "stage": "grounding_review",
+        "slug": str(metadata["slug"]),
+        "title": str(metadata["title"]),
+        "input_paths": [
+            str((talk_dir / "metadata.json").resolve()),
+            str((talk_dir / "evidence.json").resolve()),
+        ],
+        "dependency_output_paths": [str(report_path.resolve())],
+        "output_paths": [str(output_path)],
+        "allowed_write_paths": [str(output_path)],
+        "required_schema": {
+            "grounded": "boolean",
+            "issues": "array",
+            "confidence": "number",
+        },
+        "validation_rules": [
+            {"type": "json_fields", "required": ["grounded", "issues", "confidence"]},
+            {"type": "allowed_writes"},
+        ],
+    }
+
+
+def agent_report_task(
+    talk_dir: Path,
+    report_path: Path,
+    metadata: dict[str, Any],
+    *,
+    cognition_tasks: list[dict[str, Any]],
+    qa_task: dict[str, Any],
+) -> dict[str, Any]:
+    dependency_outputs = [output for task in cognition_tasks for output in task["output_paths"]]
+    dependency_outputs.extend(qa_task["output_paths"])
+    return {
+        "task_id": f"report:{metadata['slug']}",
+        "stage": "report_write",
         "slug": str(metadata["slug"]),
         "title": str(metadata["title"]),
         "talk_dir": str(talk_dir.resolve()),
@@ -367,6 +484,24 @@ def agent_report_task(talk_dir: Path, report_path: Path, metadata: dict[str, Any
         "metadata_path": str((talk_dir / "metadata.json").resolve()),
         "timeline_path": str((talk_dir / "timeline.txt").resolve()),
         "report_path": str(report_path.resolve()),
+        "input_paths": [
+            str((talk_dir / "report_writer_prompt.md").resolve()),
+            str((talk_dir / "evidence.json").resolve()),
+            str((talk_dir / "metadata.json").resolve()),
+            str((talk_dir / "timeline.txt").resolve()),
+            str((talk_dir / "slides").resolve()),
+        ],
+        "dependency_output_paths": dependency_outputs,
+        "output_paths": [str(report_path.resolve())],
+        "allowed_write_paths": [str(report_path.resolve())],
+        "required_sections": REPORT_REQUIRED_SECTIONS,
+        "validation_rules": [
+            {"type": "exists", "paths": "output_paths"},
+            {"type": "markdown_required_sections", "sections": REPORT_REQUIRED_SECTIONS},
+            {"type": "markdown_image_links_exist"},
+            {"type": "allowed_writes"},
+        ],
+        "done_condition": "Write exactly one final Markdown report to output_paths[0] after dependency_output_paths exist.",
     }
 
 
@@ -390,7 +525,7 @@ def require_openai_writer_key() -> None:
         )
 
 
-def generate_talk_report(talk_dir: Path, reports_dir: Path, cfg: dict[str, Any], *, writer_mode: str) -> tuple[Path, dict[str, str] | None]:
+def generate_talk_report(talk_dir: Path, reports_dir: Path, cfg: dict[str, Any], *, writer_mode: str) -> tuple[Path, dict[str, list[dict[str, Any]]]]:
     metadata = read_json(talk_dir / "metadata.json")
     intervals = read_json(talk_dir / "slide_intervals.json")
     timeline = transcript_text(talk_dir / "timeline.txt")
@@ -399,9 +534,18 @@ def generate_talk_report(talk_dir: Path, reports_dir: Path, cfg: dict[str, Any],
     notes_dir = ensure_dir(talk_dir / "notes")
     evidence, skipped_slides = build_slide_evidence(talk_dir, metadata, intervals, timeline, cfg)
     if writer_mode == "agent":
-        return report_path, agent_report_task(talk_dir, report_path, metadata)
+        cognition_tasks = agent_slide_cognition_tasks(talk_dir, metadata, evidence)
+        qa_task = agent_qa_task(talk_dir, metadata)
+        report_task = agent_report_task(talk_dir, report_path, metadata, cognition_tasks=cognition_tasks, qa_task=qa_task)
+        grounding_task = agent_grounding_task(talk_dir, report_path, metadata)
+        return report_path, {
+            "slide_cognition": cognition_tasks,
+            "qa_detection": [qa_task],
+            "report_write": [report_task],
+            "grounding_review": [grounding_task],
+        }
     if writer_mode == "evidence":
-        return write_evidence_bundle_report(report_path, metadata, evidence, skipped_slides), None
+        return write_evidence_bundle_report(report_path, metadata, evidence, skipped_slides), {}
     if writer_mode != "openai":
         raise ValueError(f"Unsupported writer mode: {writer_mode}")
 
@@ -448,7 +592,7 @@ def generate_talk_report(talk_dir: Path, reports_dir: Path, cfg: dict[str, Any],
             "",
         ])
     report_path.write_text("\n".join(lines), encoding="utf-8")
-    return report_path, None
+    return report_path, {}
 
 
 def generate_reports(out_dir: Path, cfg: dict[str, Any], *, dry_run: bool | None = None, writer: str | None = None) -> list[Path]:
@@ -458,28 +602,51 @@ def generate_reports(out_dir: Path, cfg: dict[str, Any], *, dry_run: bool | None
     talks_root = out_dir / "talks"
     reports_dir = ensure_dir(out_dir / "reports")
     report_paths: list[Path] = []
-    agent_tasks: list[dict[str, str]] = []
+    agent_tasks: dict[str, list[dict[str, Any]]] = {
+        "slide_cognition": [],
+        "qa_detection": [],
+        "report_write": [],
+        "grounding_review": [],
+    }
     for talk_dir in sorted(path for path in talks_root.iterdir() if path.is_dir()):
-        report_path, task = generate_talk_report(talk_dir, reports_dir, cfg, writer_mode=writer_mode)
+        report_path, task_bundle = generate_talk_report(talk_dir, reports_dir, cfg, writer_mode=writer_mode)
         report_paths.append(report_path)
-        if task is not None:
-            agent_tasks.append(task)
+        for stage, tasks in task_bundle.items():
+            agent_tasks.setdefault(stage, []).extend(tasks)
 
-    tasks_manifest = out_dir / "agent_report_tasks.json"
+    task_manifest_paths = {
+        "slide_cognition": out_dir / "agent_slide_cognition_tasks.json",
+        "qa_detection": out_dir / "agent_qa_tasks.json",
+        "report_write": out_dir / "agent_report_tasks.json",
+        "grounding_review": out_dir / "agent_grounding_tasks.json",
+    }
     if writer_mode == "agent":
-        write_json(tasks_manifest, agent_tasks)
-    elif tasks_manifest.exists():
-        tasks_manifest.unlink()
+        for stage, path in task_manifest_paths.items():
+            write_json(path, agent_tasks.get(stage, []))
+    else:
+        for path in task_manifest_paths.values():
+            if path.exists():
+                path.unlink()
+
+    planned_reports = [str(path.resolve()) for path in report_paths]
+    completed_reports = [path for path in planned_reports if Path(path).exists()]
+    pending_reports = [path for path in planned_reports if not Path(path).exists()]
+    report_manifest_paths = completed_reports if writer_mode == "agent" else planned_reports
 
     manifest = {
         "dry_run": writer_mode == "evidence",
         "writer_mode": writer_mode,
         "final_reports": writer_mode == "openai",
         "mode": {"agent": "agent_subagents", "evidence": "evidence_bundle", "openai": "openai_responses"}[writer_mode],
-        "reports": [str(path.resolve()) for path in report_paths],
+        "reports": report_manifest_paths,
+        "planned_reports": planned_reports,
+        "completed_reports": completed_reports,
+        "pending_reports": pending_reports,
     }
     if writer_mode == "agent":
-        manifest["tasks_manifest"] = str(tasks_manifest.resolve())
-        manifest["task_count"] = len(agent_tasks)
+        manifest["task_manifests"] = {stage: str(path.resolve()) for stage, path in task_manifest_paths.items()}
+        manifest["tasks_manifest"] = str(task_manifest_paths["report_write"].resolve())
+        manifest["task_count"] = sum(len(tasks) for tasks in agent_tasks.values())
+        manifest["task_counts"] = {stage: len(tasks) for stage, tasks in agent_tasks.items()}
     write_json(out_dir / "reports_manifest.json", manifest)
     return report_paths

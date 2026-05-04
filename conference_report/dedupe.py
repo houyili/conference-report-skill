@@ -9,6 +9,7 @@ from typing import Any
 
 from PIL import Image, ImageChops, ImageStat
 
+from .embeddings import run_semantic_dedupe_artifacts
 from .utils import ensure_dir, extract_time_from_name, format_time, list_pngs, parse_time_seconds, timeline_lines, write_json
 
 
@@ -22,7 +23,7 @@ class Slide:
 
 
 def hamming(a: int, b: int) -> int:
-    return (a ^ b).bit_count()
+    return bin(a ^ b).count("1")
 
 
 def average_hash(img: Image.Image, size: int = 16) -> int:
@@ -215,6 +216,13 @@ def dedupe_slides(out_dir: Path, cfg: dict[str, Any]) -> dict[str, Any]:
     write_json(out_dir / "slide_intervals.json", intervals)
     write_json(out_dir / "dedup_groups.json", groups)
     write_review_html(provenance_dir / "dedup_review.html", rows)
-    manifest = {"original_count": len(source_paths), "kept_count": len(kept), "duplicate_count": len(source_paths) - len(kept), "slides_dedup": str(dedup_dir.resolve())}
+    semantic_manifest = run_semantic_dedupe_artifacts(out_dir, cfg, source_paths, rows)
+    manifest = {
+        "original_count": len(source_paths),
+        "kept_count": len(kept),
+        "duplicate_count": len(source_paths) - len(kept),
+        "slides_dedup": str(dedup_dir.resolve()),
+        **semantic_manifest,
+    }
     write_json(out_dir / "dedupe_manifest.json", manifest)
     return manifest

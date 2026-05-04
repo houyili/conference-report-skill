@@ -38,7 +38,7 @@ Then run:
   --cookies-from-browser chrome
 ```
 
-Agent-hosted use does not require an OpenAI API key. The CLI prepares evidence and one agent writing task per reportable talk/topic, then the host agent must use its own subagents to write the final reports.
+Agent-hosted use does not require an OpenAI API key. The CLI prepares evidence plus deterministic JSON task manifests; the host agent only executes those tasks and writes the exact files named in each task's `allowed_write_paths`.
 
 Developer-only source checkout debugging may use the package module form, but this is not a use-stage path:
 
@@ -52,23 +52,40 @@ Use `--writer openai` only for pure CLI writing with the user's own `OPENAI_API_
 
 ## Agent-Native Writing
 
-After the CLI finishes with `--writer agent`, read `agent_report_tasks.json`. Create one subagent per task/talk/topic. Each subagent owns exactly one task and writes only that task's `report_path`.
-
-Give each subagent:
-
-- `prompt_path`: writer instructions
-- `evidence_path`: per-slide OCR and ASR evidence
-- `metadata_path` and `timeline_path`
-- `slides_dir`
-- `report_path`: the only file it should create or replace
-
-Subagents must write final Markdown reports with the required report structure below. They must not edit other reports, shared manifests, source files, credentials, cookies, or unrelated outputs. After all subagents finish, the parent agent runs:
+After the CLI finishes with `--writer agent`, first validate the generated task contracts:
 
 ```bash
-"$CLI" validate --out outputs/<run-name> --config config.example.yaml
+"$CLI" validate --out outputs/<run-name> --config config.example.yaml --phase agent-tasks
 ```
 
-If the host environment cannot create subagents, stop after task generation and tell the user final report writing requires agent subagents or pure CLI `--writer openai`.
+Then read the task manifests from the run directory:
+
+- `agent_slide_cognition_tasks.json`
+- `agent_qa_tasks.json`
+- `agent_report_tasks.json`
+- `agent_grounding_tasks.json`
+
+The agent host does not decide the workflow. Execute tasks in this order: `slide_cognition`, `qa_detection`, `report_write`, then `grounding_review`. If the host supports subagents, create one subagent per task within the current stage. If the host has no subagent support, execute the tasks sequentially in the same stage order. Do not skip a stage and do not edit any task manifest.
+
+Every task is self-contained. Give the worker only the JSON task object and its listed files:
+
+- `task_id` and `stage`: identity and workflow stage
+- `input_paths`: existing files/directories to read
+- `dependency_output_paths`: prior task outputs that must already exist before this task runs
+- `output_paths`: files this task must produce
+- `allowed_write_paths`: the only paths this task may create or replace
+- `required_sections`, `required_schema`, and `validation_rules`: completion criteria
+
+Workers must not edit shared manifests, source files, credentials, cookies, unrelated outputs, or any path not listed in `allowed_write_paths`. Report-writing tasks must write final Markdown reports with the required report structure below.
+
+After each stage, the parent agent may rerun the task validation phase. After all stages finish, final validation is mandatory:
+
+```bash
+"$CLI" validate --out outputs/<run-name> --config config.example.yaml --phase agent-tasks
+"$CLI" validate --out outputs/<run-name> --config config.example.yaml --phase final
+```
+
+If `--phase final` fails, do not claim final reports are complete. Read `validation.json` and `agent_task_validation.json`, fix only the failed task outputs permitted by `allowed_write_paths`, and rerun final validation.
 
 ## Pipeline
 
@@ -77,10 +94,10 @@ Run stages in order when debugging:
 1. `ingest`: save metadata, subtitles, and authorized page dumps with `yt-dlp`.
 2. `asr`: prefer platform subtitles; preserve audio/WAV when `asr.save_audio` is enabled; fall back to local `faster-whisper` or OpenAI transcription if configured.
 3. `slides`: prefer slide metadata; otherwise extract screenshots from video.
-4. `dedupe`: preserve originals, cluster repeated slides, and record `main_interval` plus `all_intervals`.
+4. `dedupe`: preserve originals, cluster repeated slides, record `main_interval` plus `all_intervals`, and optionally emit local semantic embedding candidates for agent/VLM review.
 5. `segment`: parse the schedule first, align actual talk starts to transcript cues, and skip coffee/poster/lunch/break segments.
 6. `report`: create per-talk evidence and agent writing tasks, or write reports with an explicit writer backend.
-7. `validate`: check timeline monotonicity, talk packaging, and Markdown image links.
+7. `validate`: run `evidence`, `agent-tasks`, or `final` phase checks. Final validation checks task outputs, required report sections, JSON schemas, and Markdown image links.
 
 ## Output Contract
 
@@ -90,15 +107,25 @@ Each run directory should contain:
 - `raw/audio/` and `asr/audio/`: preserved source audio/media and 16 kHz WAV when `asr.save_audio: true`
 - `slides_original/`: original screenshots, never deleted during dedupe
 - `slides_dedup/`: representative slide PNGs
+- `embeddings/slides/`: optional local SigLIP/CLIP-family semantic embedding cache
+- `dedupe/semantic_candidates.json`: embedding-recalled possible same-slide pairs needing review
+- `dedupe/agent_review_tasks.json`: optional bounded review tasks for uncertain semantic dedupe candidates
 - `dedup_groups.json`: visual slide clusters with provenance and repeated intervals
 - `slide_intervals.json/csv`: chronological slide intervals
 - `segmentation/talks.json`: talk/keynote/panel boundaries and confidence
 - `segmentation/review.html`: segmentation review
 - `talks/<talk_slug>/`: one material bundle per reportable talk
 - `talks/<talk_slug>/evidence.json`: OCR plus ASR evidence per reportable slide
+- `talks/<talk_slug>/slide_cognition/*.json`: persistent agent/VLM cognition for each slide task
+- `talks/<talk_slug>/qa/qa_candidates.json`: persistent QA detection output
 - `talks/<talk_slug>/report_writer_prompt.md`: writer instructions
-- `agent_report_tasks.json`: one subagent writing task per reportable talk/topic when `--writer agent` is used
+- `agent_slide_cognition_tasks.json`: one bounded cognition task per evidence slide when `--writer agent` is used
+- `agent_qa_tasks.json`: one bounded QA detection task per reportable talk/topic
+- `agent_report_tasks.json`: one bounded report-writing task per reportable talk/topic
+- `agent_grounding_tasks.json`: one bounded grounding review task per final report
+- `agent_task_validation.json`: machine-readable status for task contract or final-output validation
 - `reports/<talk_slug>.md`: final report written by subagents/OpenAI, or clearly marked evidence bundle
+- `reports/<talk_slug>.grounding.json`: persistent grounding review for the final report
 
 ## Report Rules
 

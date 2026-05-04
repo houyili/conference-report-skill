@@ -61,18 +61,33 @@ class ReportWriterModeTests(unittest.TestCase):
 
             tasks = read_json(out / "agent_report_tasks.json")
             self.assertEqual(len(tasks), 2)
+            self.assertTrue(all(item["stage"] == "report_write" for item in tasks))
+            self.assertTrue(all(item["task_id"].startswith("report:") for item in tasks))
             self.assertEqual(len({item["report_path"] for item in tasks}), 2)
             self.assertEqual({Path(item["talk_dir"]).name for item in tasks}, {"talk_one", "talk_two"})
             self.assertTrue(all(Path(item["prompt_path"]).exists() for item in tasks))
             self.assertTrue(all(Path(item["evidence_path"]).exists() for item in tasks))
             self.assertTrue(all(Path(item["slides_dir"]).exists() for item in tasks))
             self.assertTrue(all(not Path(item["report_path"]).exists() for item in tasks))
+            self.assertTrue(all(item["output_paths"] == [item["report_path"]] for item in tasks))
+            self.assertTrue(all(item["allowed_write_paths"] == item["output_paths"] for item in tasks))
+            self.assertTrue(all("摘要" in item["required_sections"] for item in tasks))
+            self.assertTrue(all("QA" in item["required_sections"] for item in tasks))
+            self.assertTrue(all("validation_rules" in item for item in tasks))
             self.assertEqual([str(path.resolve()) for path in report_paths], [item["report_path"] for item in tasks])
 
             manifest = read_json(out / "reports_manifest.json")
             self.assertEqual(manifest["writer_mode"], "agent")
             self.assertFalse(manifest["final_reports"])
             self.assertEqual(manifest["mode"], "agent_subagents")
+            self.assertEqual(manifest["reports"], [])
+            self.assertEqual(sorted(manifest["planned_reports"]), sorted(item["report_path"] for item in tasks))
+            self.assertEqual(manifest["completed_reports"], [])
+            self.assertEqual(sorted(manifest["pending_reports"]), sorted(item["report_path"] for item in tasks))
+            self.assertEqual(manifest["task_manifests"]["report_write"], str((out / "agent_report_tasks.json").resolve()))
+            self.assertIn("slide_cognition", manifest["task_manifests"])
+            self.assertIn("qa_detection", manifest["task_manifests"])
+            self.assertIn("grounding_review", manifest["task_manifests"])
 
     def test_openai_writer_requires_key_before_calling_openai(self):
         with tempfile.TemporaryDirectory() as tmp:

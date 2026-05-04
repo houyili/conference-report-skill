@@ -11,7 +11,7 @@ from .ingest import ingest
 from .report import generate_reports
 from .segment import segment
 from .slides import extract_slides
-from .utils import write_json
+from .utils import read_json, write_json
 from .validate import validate_run
 
 
@@ -68,6 +68,8 @@ def main(argv: list[str] | None = None) -> int:
             cmd.add_argument("--manual-segments", type=Path)
         if name == "report":
             add_writer_options(cmd)
+        if name == "validate":
+            cmd.add_argument("--phase", choices=["evidence", "agent-tasks", "final"], default="evidence")
 
     args = parser.parse_args(argv)
     if args.cmd == "init-config":
@@ -103,7 +105,7 @@ def main(argv: list[str] | None = None) -> int:
     elif args.cmd == "report":
         generate_reports(out, cfg, writer=selected_writer(args))
     elif args.cmd == "validate":
-        result = validate_run(out)
+        result = validate_run(out, phase=args.phase)
         print("OK" if result["ok"] else "FAILED")
         return 0 if result["ok"] else 1
     elif args.cmd == "build":
@@ -120,8 +122,19 @@ def main(argv: list[str] | None = None) -> int:
         manifest["steps"].append("segment")
         generate_reports(out, cfg, writer=selected_writer(args, build=True))
         manifest["steps"].append("report")
-        validation = validate_run(out)
+        reports_manifest = {}
+        reports_manifest_path = out / "reports_manifest.json"
+        if reports_manifest_path.exists():
+            reports_manifest = read_json(reports_manifest_path)
+        if reports_manifest.get("writer_mode") == "agent":
+            validation_phase = "agent-tasks"
+        elif reports_manifest.get("writer_mode") == "openai":
+            validation_phase = "final"
+        else:
+            validation_phase = "evidence"
+        validation = validate_run(out, phase=validation_phase)
         manifest["steps"].append("validate")
+        manifest["validation_phase"] = validation_phase
         manifest["validation_ok"] = validation["ok"]
         write_json(out / "manifest.json", manifest)
         return 0 if validation["ok"] else 1

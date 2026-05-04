@@ -36,6 +36,7 @@ dependencies = [
 [project.optional-dependencies]
 asr = ["faster-whisper>=1.1,<2"]
 dev = ["pytest>=8,<9"]
+embeddings = ["numpy>=1.24,<3", "torch>=2.2", "transformers>=4.45,<5"]
 speedups = ["lxml>=5,<7"]
 
 [project.urls]

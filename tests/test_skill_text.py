@@ -30,6 +30,17 @@ class ConferenceReportSkillTextTests(unittest.TestCase):
         self.assertIn("agent_report_tasks.json", text)
         self.assertIn("does not require an OpenAI API key", text)
 
+    def test_skill_requires_task_manifests_write_limits_and_final_validation(self):
+        text = SKILL_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("agent_slide_cognition_tasks.json", text)
+        self.assertIn("agent_qa_tasks.json", text)
+        self.assertIn("agent_grounding_tasks.json", text)
+        self.assertIn("allowed_write_paths", text)
+        self.assertIn("--phase agent-tasks", text)
+        self.assertIn("--phase final", text)
+        self.assertIn("sequential", text.lower())
+
 
 if __name__ == "__main__":
     unittest.main()

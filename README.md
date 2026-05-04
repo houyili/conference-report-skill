@@ -20,13 +20,21 @@ asr/timeline.jsonl           # structured ASR rows
 asr/audio/                   # 16 kHz mono WAV used for local/API ASR or audit
 slides_original/             # original [time].png screenshots
 slides_dedup/                # representative slide PNGs
+embeddings/slides/           # optional local semantic embedding cache
+dedupe/semantic_candidates.json
+dedupe/agent_review_tasks.json
 dedup_groups.json            # provenance-preserving visual clusters
 slide_intervals.json/csv     # slide start/end and repeated occurrence intervals
 segmentation/talks.json      # talk/keynote/panel boundaries
 segmentation/review.html     # human review page
 talks/<talk_slug>/           # per-talk material bundle
-agent_report_tasks.json      # one host-subagent writing task per reportable talk in agent mode
+agent_slide_cognition_tasks.json
+agent_qa_tasks.json
+agent_report_tasks.json
+agent_grounding_tasks.json
+agent_task_validation.json
 reports/<talk_slug>.md       # final Chinese report, or evidence bundle when requested
+reports/<talk_slug>.grounding.json
 manifest.json
 ```
 
@@ -59,6 +67,7 @@ Optional:
 | Dependency | Version / range | Purpose |
 | --- | --- | --- |
 | faster-whisper | `>=1.1,<2` | local ASR fallback |
+| torch + transformers + numpy | see `.[embeddings]` | local SigLIP/CLIP-family slide embeddings |
 | tesseract | `>=5` recommended | local OCR evidence bundles |
 | lxml | `>=5,<7` | faster HTML parsing |
 | pytest | `>=8,<9` | tests |
@@ -97,6 +106,14 @@ python3 -m venv .venv
 .venv/bin/python -m pip install -e ".[asr,dev]"
 brew install ffmpeg tesseract   # macOS example
 ```
+
+For optional local semantic slide embeddings:
+
+```bash
+.venv/bin/python -m pip install -e ".[embeddings]"
+```
+
+Embeddings are an enhancement for dedupe candidate recall. If the extra is not installed, the CLI keeps conservative dedupe and writes a clear warning artifact instead of blocking the pipeline.
 
 Linux and Windows equivalents:
 
@@ -264,12 +281,14 @@ conference-report slides --out outputs/run --config config.example.yaml
 conference-report dedupe --out outputs/run --config config.example.yaml
 conference-report segment --out outputs/run --config config.example.yaml
 conference-report report --out outputs/run --config config.example.yaml
-conference-report validate --out outputs/run --config config.example.yaml
+conference-report validate --out outputs/run --config config.example.yaml --phase evidence
+conference-report validate --out outputs/run --config config.example.yaml --phase agent-tasks
+conference-report validate --out outputs/run --config config.example.yaml --phase final
 ```
 
 Writer modes:
 
-- `--writer agent`: prepare `agent_report_tasks.json`; the host skill creates one subagent per talk/topic to write final reports. This is the default skill path and does not require an OpenAI API key.
+- `--writer agent`: prepare deterministic task manifests; the host skill executes only those JSON tasks, writes only `allowed_write_paths`, and uses `validate --phase final` as the completion gate. This is the default skill path and does not require an OpenAI API key.
 - `--writer openai`: pure CLI automated writing with the user's own OpenAI API key.
 - `--writer evidence`: write evidence bundles only.
 - `--writer auto`: pure CLI default; use OpenAI when a key exists, otherwise evidence bundles.
@@ -282,6 +301,12 @@ By default `config.example.yaml` keeps an audio audit artifact even when platfor
 asr:
   save_audio: true
   audio_required: false
+embeddings:
+  enabled: true
+  provider: local_siglip
+  model: google/siglip-base-patch16-224
+  device: auto
+  cache_dir: embeddings
 ```
 
 Set `save_audio: false` if you only need subtitles/transcripts and want to avoid downloading large media files. Set `audio_required: true` when a run should fail if audio preservation is impossible.
@@ -323,7 +348,7 @@ python3 scripts/install_agent_skill.py upgrade --target-dir /path/to/agent/skill
 
 The legacy `scripts/install_codex_skill.py` wrapper is still available for Codex users, but it also requires `--target-dir`; the repository does not infer or hardcode global skill directories.
 
-The skill is intentionally small. User-facing setup and dependency information lives in this README; the skill itself tells agents how to run the pipeline and how to preserve report quality.
+The skill is intentionally small. User-facing setup and dependency information lives in this README; the skill itself tells agents how to run the pipeline, execute task manifests in order, obey `allowed_write_paths`, and preserve report quality.
 
 ## Development
 
@@ -352,7 +377,8 @@ This is a v1 alpha. It is intentionally conservative:
 - SlidesLive-style slide metadata is preferred when available.
 - Otherwise, `ffmpeg` scene/interval screenshots are used. For ordinary videos that miss slide changes, set `slides.video_mode: interval` and tune `slides.interval_seconds` in the config.
 - Slide dedupe preserves provenance and never deletes `slides_original/`.
+- Optional local semantic embeddings recall similar slide pairs under brightness, scale, camera, or perspective changes; agent/VLM review tasks are audit artifacts, while CLI validation remains the workflow gate.
 - Schedule parsing is best-effort and currently strongest for ICLR-style pages.
-- Report writing uses host-agent subagents in skill mode, OpenAI Responses API only when `--writer openai` is configured, or evidence bundles when requested/no key is available.
+- Report writing uses host-agent task execution in skill mode, OpenAI Responses API only when `--writer openai` is configured, or evidence bundles when requested/no key is available.
 
 Contributions that improve schedule parsers, video backends, and non-OpenAI writer adapters are welcome.

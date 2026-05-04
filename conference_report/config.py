@@ -39,6 +39,15 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "changed_threshold": 0.006,
         "hash_threshold": 6,
     },
+    "embeddings": {
+        "enabled": True,
+        "provider": "local_siglip",
+        "model": "google/siglip-base-patch16-224",
+        "device": "auto",
+        "cache_dir": "embeddings",
+        "similarity_threshold": 0.92,
+        "candidate_limit": 200,
+    },
     "report": {
         "writer": "auto",
         "language": "zh",
