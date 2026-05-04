@@ -150,7 +150,8 @@ def pause_for_report_agent(out: Path, args: argparse.Namespace, completed_stages
     )
     state = read_pipeline_state(out) or {}
     state["task_manifests"] = report_task_manifests(out)
-    state["next_allowed_command"] = f"conference-report validate --out {out} --phase final"
+    config_arg = f" --config {state['config_path']}" if state.get("config_path") else ""
+    state["next_allowed_command"] = f"conference-report validate --out {out}{config_arg} --phase final"
     write_json(out / "pipeline_state.json", state)
     print(format_state_for_human(state))
 

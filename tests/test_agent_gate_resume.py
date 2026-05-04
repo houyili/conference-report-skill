@@ -175,6 +175,8 @@ class AgentGateResumeTests(unittest.TestCase):
             self.assertEqual(state["current_status"], "waiting_for_agent")
             self.assertEqual(state["blocked_gate"], "dedupe_review")
             self.assertIn("dedupe/agent_review_tasks.json", state["task_manifests"])
+            self.assertIn("config_path", state)
+            self.assertIn("--config", state["next_allowed_command"])
             self.assertIn("validate", state["next_allowed_command"])
             self.assertIn("resume", state["resume_command"])
 
@@ -291,7 +293,9 @@ class AgentGateResumeTests(unittest.TestCase):
             state = read_json(out / "pipeline_state.json")
             self.assertEqual(state["current_status"], "waiting_for_agent")
             self.assertEqual(state["blocked_gate"], "report_agent")
+            self.assertIn("config_path", state)
             self.assertIn("agent_report_tasks.json", state["task_manifests"])
+            self.assertIn("--config", state["next_allowed_command"])
             self.assertIn("--phase final", state["next_allowed_command"])
 
     def test_status_outputs_current_gate_and_next_command(self):
