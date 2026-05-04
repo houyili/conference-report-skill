@@ -587,7 +587,8 @@ def guided_install(args: argparse.Namespace) -> int:
         print("\n" + missing_required_tool_warning(missing_required_tools))
 
     print("\nOpenAI API key")
-    print("Without a key, the report step can still emit evidence bundles instead of final automated reports.")
+    print("Agent skill use writes reports with host subagents and does not require an OpenAI API key.")
+    print("Store a key only if you want pure CLI --writer openai report writing or OpenAI ASR fallback.")
     maybe_store_openai_key(command, default=False)
 
     prompt_skill_install(command)

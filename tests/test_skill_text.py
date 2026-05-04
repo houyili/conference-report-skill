@@ -22,6 +22,14 @@ class ConferenceReportSkillTextTests(unittest.TestCase):
         self.assertIn("python -m conference_report.cli", quick_start)
         self.assertNotIn("If working from a source checkout", quick_start)
 
+    def test_skill_defaults_to_agent_writer_with_one_subagent_per_talk(self):
+        text = SKILL_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("--writer agent", text)
+        self.assertIn("one subagent per", text.lower())
+        self.assertIn("agent_report_tasks.json", text)
+        self.assertIn("does not require an OpenAI API key", text)
+
 
 if __name__ == "__main__":
     unittest.main()

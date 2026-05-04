@@ -25,7 +25,8 @@ slide_intervals.json/csv     # slide start/end and repeated occurrence intervals
 segmentation/talks.json      # talk/keynote/panel boundaries
 segmentation/review.html     # human review page
 talks/<talk_slug>/           # per-talk material bundle
-reports/<talk_slug>.md       # final Chinese report, or evidence bundle if no writer backend
+agent_report_tasks.json      # one host-subagent writing task per reportable talk in agent mode
+reports/<talk_slug>.md       # final Chinese report, or evidence bundle when requested
 manifest.json
 ```
 
@@ -36,7 +37,7 @@ Final reports follow this structure:
 - 逐页 PPT 解读 with image, time range, and grounded explanation
 - QA, when evidence exists
 
-The report writer is intentionally conservative: it should combine visible PPT content with ASR evidence, keep English technical terms in English, and write `不确定` when the evidence is insufficient.
+The report writer is intentionally conservative: it should combine visible PPT content with ASR evidence, keep English technical terms in English, and write `不确定` when the evidence is insufficient. In Codex, Claude Code, Antigravity, and OpenClaw, the installed skill uses the host agent's own subagents for final writing; an OpenAI API key is only needed for pure CLI `--writer openai` mode or OpenAI ASR fallback.
 
 ## Dependencies
 
@@ -210,7 +211,7 @@ sudo apt-get remove ffmpeg tesseract-ocr
 
 ## API Key And Privacy
 
-For final automated reports, store your own OpenAI API key in the OS credential store:
+For pure CLI OpenAI writing, store your own OpenAI API key in the OS credential store:
 
 ```bash
 .venv/bin/conference-report auth set openai
@@ -250,7 +251,8 @@ The tool asks `yt-dlp` to read cookies from your local browser session. It does 
 ```bash
 .venv/bin/conference-report build URL \
   --out outputs/run-name \
-  --config config.example.yaml
+  --config config.example.yaml \
+  --writer auto
 ```
 
 Useful subcommands:
@@ -265,7 +267,14 @@ conference-report report --out outputs/run --config config.example.yaml
 conference-report validate --out outputs/run --config config.example.yaml
 ```
 
-If there is no OpenAI key and `dry_run_without_key: true`, the `report` step emits evidence bundles instead of pretending they are final research reports. Evidence bundles are useful for review, but they are not finished reports.
+Writer modes:
+
+- `--writer agent`: prepare `agent_report_tasks.json`; the host skill creates one subagent per talk/topic to write final reports. This is the default skill path and does not require an OpenAI API key.
+- `--writer openai`: pure CLI automated writing with the user's own OpenAI API key.
+- `--writer evidence`: write evidence bundles only.
+- `--writer auto`: pure CLI default; use OpenAI when a key exists, otherwise evidence bundles.
+
+If no writer backend is available, evidence bundles are useful for review, but they are not finished reports.
 
 By default `config.example.yaml` keeps an audio audit artifact even when platform subtitles are available:
 
@@ -344,6 +353,6 @@ This is a v1 alpha. It is intentionally conservative:
 - Otherwise, `ffmpeg` scene/interval screenshots are used. For ordinary videos that miss slide changes, set `slides.video_mode: interval` and tune `slides.interval_seconds` in the config.
 - Slide dedupe preserves provenance and never deletes `slides_original/`.
 - Schedule parsing is best-effort and currently strongest for ICLR-style pages.
-- Report writing uses OpenAI Responses API when configured; without a key it emits evidence bundles.
+- Report writing uses host-agent subagents in skill mode, OpenAI Responses API only when `--writer openai` is configured, or evidence bundles when requested/no key is available.
 
 Contributions that improve schedule parsers, video backends, and non-OpenAI writer adapters are welcome.

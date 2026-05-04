@@ -12,6 +12,8 @@ from .auth import get_openai_api_key, openai_client_kwargs
 from .utils import ensure_dir, find_tool, parse_time_seconds, read_json, write_json
 
 
+WRITER_MODES = {"auto", "agent", "openai", "evidence"}
+
 BOILERPLATE_TOKENS = {
     "iclr",
     "international",
@@ -354,7 +356,41 @@ def write_evidence_bundle_report(report_path: Path, metadata: dict[str, Any], ev
     return report_path
 
 
-def generate_talk_report(talk_dir: Path, reports_dir: Path, cfg: dict[str, Any], *, dry_run: bool) -> Path:
+def agent_report_task(talk_dir: Path, report_path: Path, metadata: dict[str, Any]) -> dict[str, str]:
+    return {
+        "slug": str(metadata["slug"]),
+        "title": str(metadata["title"]),
+        "talk_dir": str(talk_dir.resolve()),
+        "slides_dir": str((talk_dir / "slides").resolve()),
+        "prompt_path": str((talk_dir / "report_writer_prompt.md").resolve()),
+        "evidence_path": str((talk_dir / "evidence.json").resolve()),
+        "metadata_path": str((talk_dir / "metadata.json").resolve()),
+        "timeline_path": str((talk_dir / "timeline.txt").resolve()),
+        "report_path": str(report_path.resolve()),
+    }
+
+
+def resolve_writer_mode(cfg: dict[str, Any], writer: str | None, dry_run: bool | None) -> str:
+    if dry_run is True:
+        return "evidence"
+    mode = writer or str(cfg.get("report", {}).get("writer", "auto"))
+    if mode not in WRITER_MODES:
+        raise ValueError(f"Unsupported writer mode: {mode}")
+    if mode == "auto":
+        return "openai" if bool(get_openai_api_key()) else "evidence"
+    return mode
+
+
+def require_openai_writer_key() -> None:
+    if not get_openai_api_key():
+        raise SystemExit(
+            "OpenAI API key is required for --writer openai. "
+            "Use --writer agent inside Codex/Claude Code/Antigravity/OpenClaw, "
+            "--writer evidence for evidence bundles, or set OPENAI_API_KEY/keyring for pure CLI writing."
+        )
+
+
+def generate_talk_report(talk_dir: Path, reports_dir: Path, cfg: dict[str, Any], *, writer_mode: str) -> tuple[Path, dict[str, str] | None]:
     metadata = read_json(talk_dir / "metadata.json")
     intervals = read_json(talk_dir / "slide_intervals.json")
     timeline = transcript_text(talk_dir / "timeline.txt")
@@ -362,8 +398,12 @@ def generate_talk_report(talk_dir: Path, reports_dir: Path, cfg: dict[str, Any],
     model = cfg["api"].get("model", "gpt-5.1")
     notes_dir = ensure_dir(talk_dir / "notes")
     evidence, skipped_slides = build_slide_evidence(talk_dir, metadata, intervals, timeline, cfg)
-    if dry_run:
-        return write_evidence_bundle_report(report_path, metadata, evidence, skipped_slides)
+    if writer_mode == "agent":
+        return report_path, agent_report_task(talk_dir, report_path, metadata)
+    if writer_mode == "evidence":
+        return write_evidence_bundle_report(report_path, metadata, evidence, skipped_slides), None
+    if writer_mode != "openai":
+        raise ValueError(f"Unsupported writer mode: {writer_mode}")
 
     slide_notes: list[dict[str, str]] = []
     for idx, item in enumerate(evidence, start=1):
@@ -408,21 +448,38 @@ def generate_talk_report(talk_dir: Path, reports_dir: Path, cfg: dict[str, Any],
             "",
         ])
     report_path.write_text("\n".join(lines), encoding="utf-8")
-    return report_path
+    return report_path, None
 
 
-def generate_reports(out_dir: Path, cfg: dict[str, Any], *, dry_run: bool | None = None) -> list[Path]:
-    if dry_run is None:
-        dry_run = not bool(get_openai_api_key()) and bool(cfg["api"].get("dry_run_without_key", True))
+def generate_reports(out_dir: Path, cfg: dict[str, Any], *, dry_run: bool | None = None, writer: str | None = None) -> list[Path]:
+    writer_mode = resolve_writer_mode(cfg, writer, dry_run)
+    if writer_mode == "openai":
+        require_openai_writer_key()
     talks_root = out_dir / "talks"
     reports_dir = ensure_dir(out_dir / "reports")
-    report_paths = []
+    report_paths: list[Path] = []
+    agent_tasks: list[dict[str, str]] = []
     for talk_dir in sorted(path for path in talks_root.iterdir() if path.is_dir()):
-        report_paths.append(generate_talk_report(talk_dir, reports_dir, cfg, dry_run=dry_run))
-    write_json(out_dir / "reports_manifest.json", {
-        "dry_run": dry_run,
-        "final_reports": not dry_run,
-        "mode": "evidence_bundle" if dry_run else "openai_responses",
+        report_path, task = generate_talk_report(talk_dir, reports_dir, cfg, writer_mode=writer_mode)
+        report_paths.append(report_path)
+        if task is not None:
+            agent_tasks.append(task)
+
+    tasks_manifest = out_dir / "agent_report_tasks.json"
+    if writer_mode == "agent":
+        write_json(tasks_manifest, agent_tasks)
+    elif tasks_manifest.exists():
+        tasks_manifest.unlink()
+
+    manifest = {
+        "dry_run": writer_mode == "evidence",
+        "writer_mode": writer_mode,
+        "final_reports": writer_mode == "openai",
+        "mode": {"agent": "agent_subagents", "evidence": "evidence_bundle", "openai": "openai_responses"}[writer_mode],
         "reports": [str(path.resolve()) for path in report_paths],
-    })
+    }
+    if writer_mode == "agent":
+        manifest["tasks_manifest"] = str(tasks_manifest.resolve())
+        manifest["task_count"] = len(agent_tasks)
+    write_json(out_dir / "reports_manifest.json", manifest)
     return report_paths

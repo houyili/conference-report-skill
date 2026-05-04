@@ -14,6 +14,8 @@ Every project change should make the repository easier for an outside user or co
 
 Treat open-source usability as the default design constraint for CLI behavior, skill instructions, installer scripts, examples, tests, and documentation. If a local user-stage test requires machine-specific paths or private access, keep those details outside tracked files and translate only the generalizable finding back into the project.
 
+Agent-hosted report writing should use the host platform's own subagents by default. The Python CLI prepares per-talk evidence and task manifests with `--writer agent`; OpenAI API keys are only required for pure CLI `--writer openai` writing or OpenAI ASR fallback.
+
 ## Installer UX
 
 The primary first-time install path for normal users is `python3 scripts/install.py`. It must be an interactive guided flow that explains each prompt, the meaning of each choice, and the recommended default. Command-line flags such as `--with-dev`, `--with-local-asr`, and `--no-venv` are for automation, contributors, and advanced users; do not make first-time users discover the right flags by reading source.

@@ -40,6 +40,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "hash_threshold": 6,
     },
     "report": {
+        "writer": "auto",
         "language": "zh",
         "preserve_terms": "en",
         "detail": "slide_by_slide",

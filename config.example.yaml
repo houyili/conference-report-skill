@@ -24,6 +24,7 @@ dedupe:
   changed_threshold: 0.006
   hash_threshold: 6
 report:
+  writer: auto
   language: zh
   preserve_terms: en
   detail: slide_by_slide

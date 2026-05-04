@@ -15,10 +15,26 @@ from .utils import write_json
 from .validate import validate_run
 
 
+WRITER_CHOICES = ["auto", "agent", "openai", "evidence"]
+
+
 def add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--config", type=Path)
     parser.add_argument("--cookies-from-browser")
+
+
+def add_writer_options(parser: argparse.ArgumentParser, *, build: bool = False) -> None:
+    parser.add_argument("--writer", choices=WRITER_CHOICES, default="auto")
+    if build:
+        parser.add_argument("--dry-run-report", action="store_true", help="Compatibility alias for --writer evidence.")
+    else:
+        parser.add_argument("--dry-run", action="store_true", help="Compatibility alias for --writer evidence.")
+
+
+def selected_writer(args: argparse.Namespace, *, build: bool = False) -> str:
+    dry_run = args.dry_run_report if build else args.dry_run
+    return "evidence" if dry_run else args.writer
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -41,7 +57,7 @@ def main(argv: list[str] | None = None) -> int:
     build.add_argument("source")
     add_common(build)
     build.add_argument("--manual-segments", type=Path)
-    build.add_argument("--dry-run-report", action="store_true")
+    add_writer_options(build, build=True)
 
     for name in ["ingest", "asr", "slides", "dedupe", "segment", "report", "validate"]:
         cmd = sub.add_parser(name)
@@ -51,7 +67,7 @@ def main(argv: list[str] | None = None) -> int:
         if name == "segment":
             cmd.add_argument("--manual-segments", type=Path)
         if name == "report":
-            cmd.add_argument("--dry-run", action="store_true")
+            add_writer_options(cmd)
 
     args = parser.parse_args(argv)
     if args.cmd == "init-config":
@@ -85,7 +101,7 @@ def main(argv: list[str] | None = None) -> int:
     elif args.cmd == "segment":
         segment(out, cfg, manual_segments=args.manual_segments)
     elif args.cmd == "report":
-        generate_reports(out, cfg, dry_run=args.dry_run)
+        generate_reports(out, cfg, writer=selected_writer(args))
     elif args.cmd == "validate":
         result = validate_run(out)
         print("OK" if result["ok"] else "FAILED")
@@ -102,7 +118,7 @@ def main(argv: list[str] | None = None) -> int:
         manifest["steps"].append("dedupe")
         segment(out, cfg, manual_segments=args.manual_segments)
         manifest["steps"].append("segment")
-        generate_reports(out, cfg, dry_run=args.dry_run_report)
+        generate_reports(out, cfg, writer=selected_writer(args, build=True))
         manifest["steps"].append("report")
         validation = validate_run(out)
         manifest["steps"].append("validate")
