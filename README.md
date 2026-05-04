@@ -148,13 +148,14 @@ There are two directories to keep in mind:
 
 For normal use through an installed agent skill, use the installed `conference-report` CLI. Do not rely on running `python -m conference_report.cli` from the checkout; that form is for contributor debugging and can hide PATH or upgrade problems in the globally installed skill.
 
-If `--out` is relative, it is resolved from the shell's current working directory:
+If `--out` is relative, it is resolved from the shell's current working directory. Create a run-local config inside the run workspace so the run can be resumed, reviewed, or shared without referring back to the source checkout:
 
 ```bash
 cd ~/reports/video-course
-~/tools/conference-report-skill/.venv/bin/conference-report build URL \
+conference-report init-config outputs/session-demo/config.yaml --profile fast
+conference-report build URL \
   --out outputs/session-demo \
-  --config ~/tools/conference-report-skill/config.example.yaml
+  --config outputs/session-demo/config.yaml
 ```
 
 This writes the run workspace to `~/reports/video-course/outputs/session-demo`. For reproducibility and easy cleanup, prefer one `--out` directory per replay/session.
@@ -260,9 +261,11 @@ Page dumps created by `yt-dlp --write-pages` are renamed to neutral `page-0001.d
 For restricted conference pages, use browser cookies only when you are authorized to access the content:
 
 ```bash
-.venv/bin/conference-report build "https://iclr.cc/virtual/2026/session/..." \
-  --out outputs/iclr-session \
-  --config config.example.yaml \
+RUN="outputs/iclr-session"
+conference-report init-config "$RUN/config.yaml" --profile fast
+conference-report build "https://iclr.cc/virtual/2026/session/..." \
+  --out "$RUN" \
+  --config "$RUN/config.yaml" \
   --cookies-from-browser chrome
 ```
 
@@ -271,21 +274,25 @@ The tool asks `yt-dlp` to read cookies from your local browser session. It does 
 ## Quick Start
 
 ```bash
-.venv/bin/conference-report build URL \
-  --out outputs/run-name \
-  --config config.example.yaml \
+RUN="outputs/run-name"
+conference-report init-config "$RUN/config.yaml" --profile fast
+conference-report build URL \
+  --out "$RUN" \
+  --config "$RUN/config.yaml" \
   --writer agent \
   --agent-gates dedupe,report
 ```
 
+`--profile fast` skips optional audio preservation when platform subtitles are available, so smoke tests and normal agent-hosted runs avoid downloading large media files just for audit storage. If subtitles are missing, audio can still be downloaded for ASR fallback. Use `--profile full` or set `asr.save_audio: true` when you want preserved source audio and WAV artifacts.
+
 With `--writer agent`, the CLI uses the host agent's LLM/VLM instead of requiring an OpenAI key for report writing. With `--agent-gates dedupe,report`, the CLI stops at agent review gates, writes `pipeline_state.json`, and prints the exact next command. Complete only the listed task manifests, then validate and resume:
 
 ```bash
-conference-report status --out outputs/run-name
-conference-report validate --out outputs/run-name --config config.example.yaml --phase dedupe-review
-conference-report resume --out outputs/run-name --config config.example.yaml
-conference-report validate --out outputs/run-name --config config.example.yaml --phase final
-conference-report resume --out outputs/run-name --config config.example.yaml
+conference-report status --out "$RUN"
+conference-report validate --out "$RUN" --config "$RUN/config.yaml" --phase dedupe-review
+conference-report resume --out "$RUN" --config "$RUN/config.yaml"
+conference-report validate --out "$RUN" --config "$RUN/config.yaml" --phase final
+conference-report resume --out "$RUN" --config "$RUN/config.yaml"
 ```
 
 If a command is refused because a gate is waiting, do not skip ahead. Read `pipeline_state.json`, finish the current gate's outputs, validate, then resume.
@@ -294,17 +301,17 @@ Useful subcommands:
 
 ```bash
 conference-report ingest URL --out outputs/run
-conference-report asr URL --out outputs/run --config config.example.yaml
-conference-report slides --out outputs/run --config config.example.yaml
-conference-report dedupe --out outputs/run --config config.example.yaml
-conference-report segment --out outputs/run --config config.example.yaml
-conference-report report --out outputs/run --config config.example.yaml
+conference-report asr URL --out outputs/run --config outputs/run/config.yaml
+conference-report slides --out outputs/run --config outputs/run/config.yaml
+conference-report dedupe --out outputs/run --config outputs/run/config.yaml
+conference-report segment --out outputs/run --config outputs/run/config.yaml
+conference-report report --out outputs/run --config outputs/run/config.yaml
 conference-report status --out outputs/run
-conference-report resume --out outputs/run --config config.example.yaml
-conference-report validate --out outputs/run --config config.example.yaml --phase evidence
-conference-report validate --out outputs/run --config config.example.yaml --phase dedupe-review
-conference-report validate --out outputs/run --config config.example.yaml --phase agent-tasks
-conference-report validate --out outputs/run --config config.example.yaml --phase final
+conference-report resume --out outputs/run --config outputs/run/config.yaml
+conference-report validate --out outputs/run --config outputs/run/config.yaml --phase evidence
+conference-report validate --out outputs/run --config outputs/run/config.yaml --phase dedupe-review
+conference-report validate --out outputs/run --config outputs/run/config.yaml --phase agent-tasks
+conference-report validate --out outputs/run --config outputs/run/config.yaml --phase final
 ```
 
 Writer modes:
@@ -316,7 +323,7 @@ Writer modes:
 
 If no writer backend is available, evidence bundles are useful for review, but they are not finished reports.
 
-By default `config.example.yaml` keeps an audio audit artifact even when platform subtitles are available:
+The `full` config profile keeps an audio audit artifact even when platform subtitles are available:
 
 ```yaml
 asr:
@@ -330,7 +337,7 @@ embeddings:
   cache_dir: embeddings
 ```
 
-Set `save_audio: false` if you only need subtitles/transcripts and want to avoid downloading large media files. Set `audio_required: true` when a run should fail if audio preservation is impossible.
+The `fast` profile writes the same structure with `save_audio: false`. You can also edit the run-local config manually. Set `audio_required: true` when a run should fail if audio preservation is impossible.
 
 ## Manual Segments
 
@@ -339,7 +346,7 @@ If the conference page does not expose a schedule, the pipeline writes `segmenta
 ```bash
 conference-report segment \
   --out outputs/run \
-  --config config.example.yaml \
+  --config outputs/run/config.yaml \
   --manual-segments examples/manual_segments/manual_segments.template.yaml
 ```
 

@@ -59,6 +59,18 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
 }
 
+CONFIG_PROFILE_OVERRIDES: dict[str, dict[str, Any]] = {
+    "full": {},
+    "fast": {
+        "asr": {
+            "save_audio": False,
+            "audio_required": False,
+        },
+    },
+}
+
+CONFIG_PROFILES = tuple(CONFIG_PROFILE_OVERRIDES.keys())
+
 
 def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
     merged = copy.deepcopy(base)
@@ -70,9 +82,17 @@ def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]
     return merged
 
 
-def load_config(path: Path | None) -> dict[str, Any]:
+def default_config_for_profile(profile: str = "full") -> dict[str, Any]:
+    if profile not in CONFIG_PROFILE_OVERRIDES:
+        choices = ", ".join(CONFIG_PROFILES)
+        raise SystemExit(f"Unsupported config profile: {profile}. Choose one of: {choices}")
+    return deep_merge(DEFAULT_CONFIG, CONFIG_PROFILE_OVERRIDES[profile])
+
+
+def load_config(path: Path | None, *, profile: str = "full") -> dict[str, Any]:
+    cfg = default_config_for_profile(profile)
     if path is None:
-        return copy.deepcopy(DEFAULT_CONFIG)
+        return cfg
     if not path.exists():
         raise SystemExit(f"Config file not found: {path}")
     text = path.read_text(encoding="utf-8")
@@ -80,8 +100,10 @@ def load_config(path: Path | None) -> dict[str, Any]:
         data = json.loads(text)
     else:
         data = yaml.safe_load(text) or {}
-    return deep_merge(DEFAULT_CONFIG, data)
+    return deep_merge(cfg, data)
 
 
-def write_default_config(path: Path) -> None:
-    path.write_text(yaml.safe_dump(DEFAULT_CONFIG, allow_unicode=True, sort_keys=False), encoding="utf-8")
+def write_default_config(path: Path, *, profile: str = "full") -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    cfg = default_config_for_profile(profile)
+    path.write_text(yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False), encoding="utf-8")

@@ -28,16 +28,20 @@ fi
 
 If no CLI path can be resolved, or the resolved command fails `--help`, stop and tell the user the installed CLI is not visible to this agent shell. Ask them to set `CONFERENCE_REPORT_CLI`, restart the agent session, expose the Python environment's script directory on the agent runtime `PATH`, or upgrade the global skill with the installer so `.local/cli-path.txt` is written. Do not silently fall back to `python -m conference_report.cli` or a repository `.venv` during normal use.
 
-Then run:
+Then create a run-local config and start the pipeline:
 
 ```bash
+RUN="outputs/<run-name>"
+"$CLI" init-config "$RUN/config.yaml" --profile fast
 "$CLI" build "$URL" \
-  --out outputs/<run-name> \
-  --config config.example.yaml \
+  --out "$RUN" \
+  --config "$RUN/config.yaml" \
   --writer agent \
   --agent-gates dedupe,report \
   --cookies-from-browser chrome
 ```
+
+The recommended `--profile fast` skips optional audio preservation when platform subtitles are available, which makes user acceptance tests and ordinary agent runs much faster. If subtitles are missing, the CLI can still download audio for ASR fallback. Use `--profile full` or edit `asr.save_audio: true` in the run-local config when the user wants preserved audio/WAV audit artifacts. If `build` is run without `--config`, the CLI writes `run-config.yaml` inside the output directory and uses that file for resume commands.
 
 Agent-hosted use does not require an OpenAI API key. The CLI prepares evidence plus deterministic JSON task manifests; the host agent only executes the current gate's tasks and writes the exact files named in each task's `allowed_write_paths`.
 
@@ -45,8 +49,8 @@ Developer-only source checkout debugging may use the package module form, but th
 
 ```bash
 python -m conference_report.cli build "$URL" \
-  --out outputs/<run-name> \
-  --config config.example.yaml
+  --out "$RUN" \
+  --config "$RUN/config.yaml"
 ```
 
 Use `--writer openai` only for pure CLI writing with the user's own `OPENAI_API_KEY` or credential store. Use `--writer evidence` or legacy `--dry-run-report` only when the user explicitly wants evidence bundles instead of final reports.
@@ -61,20 +65,20 @@ When a run is paused, inspect the state:
 "$CLI" status --out outputs/<run-name>
 ```
 
-The equivalent literal commands are `conference-report status --out outputs/<run-name>` and `conference-report resume --out outputs/<run-name> --config config.example.yaml` when `conference-report` is visible on `PATH`.
+The equivalent literal commands are `conference-report status --out outputs/<run-name>` and `conference-report resume --out outputs/<run-name> --config outputs/<run-name>/config.yaml` when `conference-report` is visible on `PATH`.
 
 Only execute the task manifests named in `pipeline_state.json`. After writing every task output, validate the current gate, then resume:
 
 ```bash
-"$CLI" validate --out outputs/<run-name> --config config.example.yaml --phase dedupe-review
-"$CLI" resume --out outputs/<run-name> --config config.example.yaml
+"$CLI" validate --out "$RUN" --config "$RUN/config.yaml" --phase dedupe-review
+"$CLI" resume --out "$RUN" --config "$RUN/config.yaml"
 ```
 
 For report writing, final validation is the gate check:
 
 ```bash
-"$CLI" validate --out outputs/<run-name> --config config.example.yaml --phase final
-"$CLI" resume --out outputs/<run-name> --config config.example.yaml
+"$CLI" validate --out "$RUN" --config "$RUN/config.yaml" --phase final
+"$CLI" resume --out "$RUN" --config "$RUN/config.yaml"
 ```
 
 If the CLI refuses a command because the run is blocked, 不要猜下一步. Read `pipeline_state.json`, complete the listed task manifests, run the printed `validate` command, then run the printed `resume` command.
@@ -84,7 +88,7 @@ If the CLI refuses a command because the run is blocked, 不要猜下一步. Rea
 When the CLI stops at the `report_agent` gate, first validate the generated task contracts if the state output asks for it:
 
 ```bash
-"$CLI" validate --out outputs/<run-name> --config config.example.yaml --phase agent-tasks
+"$CLI" validate --out "$RUN" --config "$RUN/config.yaml" --phase agent-tasks
 ```
 
 Then read the task manifests from the run directory:
@@ -110,9 +114,9 @@ Workers must not edit shared manifests, source files, credentials, cookies, unre
 After each stage, the parent agent may rerun the task validation phase. After all stages finish, final validation and resume are mandatory:
 
 ```bash
-"$CLI" validate --out outputs/<run-name> --config config.example.yaml --phase agent-tasks
-"$CLI" validate --out outputs/<run-name> --config config.example.yaml --phase final
-"$CLI" resume --out outputs/<run-name> --config config.example.yaml
+"$CLI" validate --out "$RUN" --config "$RUN/config.yaml" --phase agent-tasks
+"$CLI" validate --out "$RUN" --config "$RUN/config.yaml" --phase final
+"$CLI" resume --out "$RUN" --config "$RUN/config.yaml"
 ```
 
 If `--phase final` fails, do not claim final reports are complete. Read `validation.json` and `agent_task_validation.json`, fix only the failed task outputs permitted by `allowed_write_paths`, and rerun final validation.

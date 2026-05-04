@@ -76,7 +76,7 @@ def write_waiting_state(
         "completed_stages": completed_stages,
         "current_status": WAITING_FOR_AGENT,
         "blocked_gate": blocked_gate,
-        "next_allowed_command": f"conference-report validate --out {out_dir} --phase {validate_phase}",
+        "next_allowed_command": f"conference-report validate --out {out_dir}{config_arg} --phase {validate_phase}",
         "resume_command": f"conference-report resume --out {out_dir}{config_arg}",
         "task_manifests": gate["task_manifests"],
         "human_message": waiting_message(blocked_gate),

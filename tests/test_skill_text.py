@@ -52,6 +52,17 @@ class ConferenceReportSkillTextTests(unittest.TestCase):
         self.assertIn("不要猜下一步", text)
         self.assertNotIn("/Users/jyxc-dz-0100301", text)
 
+    def test_skill_quick_start_uses_run_local_config_and_fast_profile(self):
+        text = SKILL_PATH.read_text(encoding="utf-8")
+
+        quick_start = text.split("## Agent Gates", 1)[0]
+        self.assertIn("init-config", quick_start)
+        self.assertIn("--profile fast", quick_start)
+        self.assertIn("$RUN/config.yaml", quick_start)
+        self.assertIn("--config \"$RUN/config.yaml\"", quick_start)
+        self.assertIn("skips optional audio preservation", quick_start)
+        self.assertNotIn("--config config.example.yaml", quick_start)
+
 
 if __name__ == "__main__":
     unittest.main()

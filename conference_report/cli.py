@@ -5,7 +5,7 @@ from pathlib import Path
 
 from .auth import credential_status, delete_secret, set_secret_interactive
 from .asr import run_asr
-from .config import load_config, write_default_config
+from .config import CONFIG_PROFILES, load_config, write_default_config
 from .dedupe import apply_dedupe_agent_reviews, dedupe_slides
 from .ingest import ingest
 from .pipeline_state import (
@@ -31,6 +31,18 @@ def add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--config", type=Path)
     parser.add_argument("--cookies-from-browser")
+
+
+def add_profile_option(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--profile",
+        choices=CONFIG_PROFILES,
+        default="full",
+        help=(
+            "Config template to use before file overrides. "
+            "'fast' skips optional audio preservation when subtitles are available; 'full' keeps audit artifacts."
+        ),
+    )
 
 
 def add_writer_options(parser: argparse.ArgumentParser, *, build: bool = False) -> None:
@@ -73,6 +85,28 @@ def print_validation_feedback(result: dict[str, object], *, next_hint: str | Non
             print(f"- {error}")
     if next_hint:
         print(next_hint)
+
+
+def prepare_build_config(args: argparse.Namespace, out: Path) -> dict[str, object]:
+    profile = getattr(args, "profile", "full")
+    if args.config is None:
+        args.config = out / "run-config.yaml"
+        write_default_config(args.config, profile=profile)
+        print(f"Wrote run config: {args.config}")
+    cfg = load_config(args.config, profile=profile)
+    print(f"Using output dir: {out}")
+    print(f"Using config: {args.config}")
+    print(f"Using config profile: {profile}")
+    if not cfg.get("asr", {}).get("save_audio", True):
+        print("ASR/audio: skips optional audio preservation when subtitles are available; fallback ASR can still download audio.")
+    return cfg
+
+
+def config_path_from_state(out: Path) -> Path | None:
+    state = read_pipeline_state(out)
+    if not state or not state.get("config_path"):
+        return None
+    return Path(str(state["config_path"]))
 
 
 def report_task_manifests(out: Path) -> list[str]:
@@ -196,6 +230,7 @@ def main(argv: list[str] | None = None) -> int:
 
     init_cfg = sub.add_parser("init-config")
     init_cfg.add_argument("path", type=Path)
+    add_profile_option(init_cfg)
 
     auth = sub.add_parser("auth")
     auth_sub = auth.add_subparsers(dest="auth_cmd", required=True)
@@ -209,6 +244,7 @@ def main(argv: list[str] | None = None) -> int:
     build = sub.add_parser("build")
     build.add_argument("source")
     add_common(build)
+    add_profile_option(build)
     build.add_argument("--manual-segments", type=Path)
     build.add_argument("--agent-gates", default="", help="Comma-separated agent gates to pause on, e.g. dedupe,report.")
     add_writer_options(build, build=True)
@@ -234,8 +270,9 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     if args.cmd == "init-config":
-        write_default_config(args.path)
+        write_default_config(args.path, profile=args.profile)
         print(f"Wrote {args.path}")
+        print(f"Config profile: {args.profile}")
         return 0
     if args.cmd == "auth":
         if args.auth_cmd == "set":
@@ -256,7 +293,12 @@ def main(argv: list[str] | None = None) -> int:
         print(format_state_for_human(read_pipeline_state(out)))
         return 0
 
-    cfg = load_config(args.config)
+    if args.cmd == "build":
+        cfg = prepare_build_config(args, out)
+    else:
+        if args.cmd == "resume" and args.config is None:
+            args.config = config_path_from_state(out)
+        cfg = load_config(args.config)
 
     if args.cmd in PIPELINE_COMMANDS:
         state = read_pipeline_state(out)
