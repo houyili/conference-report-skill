@@ -42,13 +42,13 @@ Default uninstall behavior should remove this project's Python package and detec
 
 The skill must remain usable by Codex, Claude Code, Antigravity, OpenClaw, and other agent hosts that support skill-like directories. Do not make the skill body depend on Codex-only behavior unless the section is explicitly labeled as a platform-specific note. Prefer agent-neutral wording such as "agent", "global skill directory", and "installed skill".
 
-Install and upgrade use explicit user-supplied target directories only:
+Install and upgrade target directories must be user-confirmed. Interactive flows may discover existing local candidate roots and recommend one, while automation should pass explicit target directories:
 
-- First install: `python3 scripts/install_agent_skill.py install --target-dir <agent-skills-root>`
-- Later upgrade: `python3 scripts/install_agent_skill.py upgrade --target-dir <agent-skills-root>`
+- First install: `python3 scripts/install_agent_skill.py install`, then choose or type the agent skills root.
+- Later upgrade: `python3 scripts/install_agent_skill.py upgrade`, then choose a detected installed copy or type the agent skills root.
 - Multiple agents: repeat `--target-dir` for each global skill root.
 
-Never infer or hardcode global skill directories in repository code or docs. Platform-specific paths belong in a user's local shell history, private notes, environment variables, or external platform documentation, not in this repo.
+Never hardcode global skill directories in repository code or docs. Platform-specific paths belong in a user's local shell history, private notes, environment variables, discovered local candidates, or external platform documentation, not in this repo.
 
 ## Build, Test, and Development Commands
 
@@ -58,8 +58,8 @@ Never infer or hardcode global skill directories in repository code or docs. Pla
 - `.venv/bin/python -m pytest -q`: run the same test command used by CI.
 - `.venv/bin/conference-report --help`: smoke-test the CLI entry point.
 - `.venv/bin/conference-report build URL --out outputs/run --config config.example.yaml`: run the full pipeline locally.
-- `python3 scripts/install_agent_skill.py install --target-dir <agent-skills-root>`: first-time install of the bundled skill into a user-selected global skill directory.
-- `python3 scripts/install_agent_skill.py upgrade --target-dir <agent-skills-root>`: refresh an existing global skill copy after development changes.
+- `python3 scripts/install_agent_skill.py install`: first-time install of the bundled skill into a user-confirmed global skill directory.
+- `python3 scripts/install_agent_skill.py upgrade`: refresh an existing global skill copy after development changes.
 - `python3 scripts/uninstall.py`: guided removal of installed Python packages and global skill copies with conservative defaults.
 - `python3 scripts/install_git_hooks.py`: install the optional repository pre-push hook. Set `CONFERENCE_REPORT_SKILL_VALIDATOR=/path/to/quick_validate.py` to add skill validation before push.
 

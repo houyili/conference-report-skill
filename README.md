@@ -166,11 +166,13 @@ git pull
 .venv/bin/python -m pip install -e ".[asr]"
 ```
 
-If you installed a global agent skill copy, refresh it after pulling by passing the agent's skill root explicitly:
+If you installed a global agent skill copy, refresh it after pulling:
 
 ```bash
-python3 scripts/install_agent_skill.py upgrade --target-dir /path/to/agent/skills
+python3 scripts/install_agent_skill.py upgrade
 ```
+
+The upgrade command scans known local agent skill roots, recommends detected installed copies, and asks you to confirm. For automation or multiple agents, pass one or more explicit `--target-dir` values.
 
 System dependencies update separately:
 
@@ -326,13 +328,13 @@ Breaks such as coffee, poster sessions, lunch, and registration are retained in 
 
 ## Agent Skill Install
 
-To install the bundled skill into an agent host such as Codex, Claude Code, Antigravity, OpenClaw, or another skill-compatible tool, pass that agent's skill root explicitly:
+To install the bundled skill into an agent host such as Codex, Claude Code, Antigravity, OpenClaw, or another skill-compatible tool, run the guided installer. It scans known local agent roots and asks you to confirm or type a path:
 
 ```bash
-python3 scripts/install_agent_skill.py install --target-dir /path/to/agent/skills
+python3 scripts/install_agent_skill.py install
 ```
 
-For multiple agent hosts, repeat `--target-dir`:
+For non-interactive automation or multiple agent hosts, repeat `--target-dir`:
 
 ```bash
 python3 scripts/install_agent_skill.py install \
@@ -343,10 +345,10 @@ python3 scripts/install_agent_skill.py install \
 After changing the source checkout, use `upgrade` instead of `install`:
 
 ```bash
-python3 scripts/install_agent_skill.py upgrade --target-dir /path/to/agent/skills
+python3 scripts/install_agent_skill.py upgrade
 ```
 
-The legacy `scripts/install_codex_skill.py` wrapper is still available for Codex users, but it also requires `--target-dir`; the repository does not infer or hardcode global skill directories.
+You can also use `python3 scripts/install_agent_skill.py upgrade -` to force the same interactive target selection. The legacy `scripts/install_codex_skill.py` wrapper is still available for Codex users, but it requires `--target-dir`; the primary cross-agent installer is preferred for guided install and upgrade.
 
 The skill is intentionally small. User-facing setup and dependency information lives in this README; the skill itself tells agents how to run the pipeline, execute task manifests in order, obey `allowed_write_paths`, and preserve report quality.
 

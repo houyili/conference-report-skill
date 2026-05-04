@@ -2,6 +2,7 @@ import importlib.util
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "install_agent_skill.py"
@@ -81,6 +82,65 @@ class InstallAgentSkillTests(unittest.TestCase):
             self.assertEqual(installed, [target_root / "conference-report"])
             self.assertFalse(stale.exists())
             self.assertTrue((target_root / "conference-report" / "SKILL.md").exists())
+
+    def test_installed_skill_roots_only_returns_existing_skill_copies(self):
+        installer = load_script_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            codex_root = home / ".codex" / "skills"
+            claude_root = home / ".claude" / "skills"
+            codex_skill = codex_root / "conference-report"
+            codex_skill.mkdir(parents=True)
+            (codex_skill / "SKILL.md").write_text("name: conference-report\n", encoding="utf-8")
+            claude_root.mkdir(parents=True)
+
+            candidates = installer.installed_skill_roots(home, {}, "conference-report")
+
+            self.assertEqual(candidates, [("Codex", codex_root, "existing ~/.codex/skills")])
+
+    def test_prompt_for_upgrade_recommends_first_installed_skill_root(self):
+        installer = load_script_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            codex_root = home / ".codex" / "skills"
+            codex_skill = codex_root / "conference-report"
+            codex_skill.mkdir(parents=True)
+            (codex_skill / "SKILL.md").write_text("name: conference-report\n", encoding="utf-8")
+
+            with mock.patch.object(installer.Path, "home", return_value=home):
+                with mock.patch.object(installer.os, "environ", {}):
+                    with mock.patch("builtins.input", return_value=""):
+                        selected = installer.prompt_for_target_dirs("upgrade", "conference-report")
+
+            self.assertEqual(selected, [codex_root])
+
+    def test_parse_args_allows_interactive_upgrade_without_target_dir(self):
+        installer = load_script_module()
+
+        args = installer.parse_args(["upgrade"])
+
+        self.assertEqual(args.command, "upgrade")
+        self.assertIsNone(args.target_dir)
+
+    def test_parse_args_accepts_dash_as_interactive_target_hint(self):
+        installer = load_script_module()
+
+        args = installer.parse_args(["upgrade", "-"])
+
+        self.assertEqual(args.command, "upgrade")
+        self.assertEqual(args.target_hint, "-")
+
+    def test_main_reports_permission_errors_without_traceback(self):
+        installer = load_script_module()
+
+        with mock.patch.object(installer, "install_skill", side_effect=PermissionError("denied")):
+            with self.assertRaises(SystemExit) as raised:
+                installer.main(["upgrade", "--target-dir", "/agent/skills"])
+
+        message = str(raised.exception)
+        self.assertIn("Could not modify installed skill target", message)
+        self.assertIn("/agent/skills/conference-report", message)
+        self.assertIn("denied", message)
 
 
 if __name__ == "__main__":
