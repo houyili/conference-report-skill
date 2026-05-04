@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import io
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from conference_report import cli
 from conference_report.utils import read_json, write_json
@@ -254,6 +256,30 @@ def write_good_agent_outputs(paths: dict[str, Path]) -> None:
     )
 
 
+def write_bad_quality_outputs(paths: dict[str, Path]) -> None:
+    write_json(
+        paths["cognition"],
+        {
+            "visible_title": "Method",
+            "chart_description": "OCR and ASR summary",
+            "key_terms": ["method"],
+            "ocr_corrections": [],
+            "asr_alignment": "aligned",
+            "uncertainties": [],
+            "confidence": 0.8,
+        },
+    )
+    write_json(paths["qa"], {"qa_candidates": [{"text": "base model? Oh no. My"}], "uncertainties": [], "confidence": 0.6})
+    paths["report"].write_text(
+        "# Talk One\n\n## 摘要\n\n总结。\n\n## 核心 Findings / Experiments / Insights\n\n发现。\n\n"
+        "## 逐页 PPT 解读\n\n### 第 1 张 PPT\n\n"
+        "综合来看，这页的作用是把可见 PPT 内容和讲者说明对齐起来，支撑本 talk 的问题动机、方法、实验或结论之一。\n\n"
+        "## QA\n\n碎片。\n",
+        encoding="utf-8",
+    )
+    write_json(paths["grounding"], {"grounded": True, "issues": [], "confidence": 0.8})
+
+
 class ReportQualityGateTests(unittest.TestCase):
     def test_report_quality_rejects_template_report_and_writes_revision_tasks(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -279,6 +305,51 @@ class ReportQualityGateTests(unittest.TestCase):
             self.assertFalse(quality["ok"])
             self.assertTrue(any("template repetition" in error for error in quality["reports"][0]["errors"]))
             self.assertTrue((out / "agent_report_revision_tasks.json").exists())
+
+    def test_report_quality_writes_full_repair_plan_for_upstream_failures(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            paths = make_agent_quality_run(out)
+            write_bad_quality_outputs(paths)
+            qa_candidates = paths["talk_dir"] / "qa" / "qa_candidates.json"
+            qa_candidates.write_text(paths["qa"].read_text(encoding="utf-8"), encoding="utf-8")
+            qa_tasks = read_json(out / "agent_qa_tasks.json")
+            qa_tasks[0]["output_paths"] = [str(qa_candidates.resolve())]
+            qa_tasks[0]["allowed_write_paths"] = [str(qa_candidates.resolve())]
+            qa_tasks[0]["required_schema"] = {"qa_candidates": "array", "uncertainties": "array", "confidence": "number"}
+            write_json(out / "agent_qa_tasks.json", qa_tasks)
+
+            result = validate_run(out, phase="report-quality")
+
+            self.assertFalse(result["ok"])
+            repair_plan = read_json(out / "agent_quality_repair_plan.json")
+            self.assertEqual(repair_plan["blocked_gate"], "report_quality_repair")
+            self.assertEqual(
+                repair_plan["stages"],
+                ["slide_cognition_revision", "qa_revision", "report_revision", "grounding_revision"],
+            )
+            self.assertIn("agent_slide_cognition_revision_tasks.json", repair_plan["task_manifests"].values())
+            self.assertIn("agent_qa_revision_tasks.json", repair_plan["task_manifests"].values())
+            self.assertIn("agent_report_revision_tasks.json", repair_plan["task_manifests"].values())
+            self.assertIn("agent_grounding_revision_tasks.json", repair_plan["task_manifests"].values())
+
+            cognition_tasks = read_json(out / "agent_slide_cognition_revision_tasks.json")
+            self.assertEqual([task["stage"] for task in cognition_tasks], ["slide_cognition_revision"])
+            self.assertEqual(cognition_tasks[0]["output_paths"], [str(paths["cognition"].resolve())])
+            self.assertEqual(cognition_tasks[0]["allowed_write_paths"], cognition_tasks[0]["output_paths"])
+
+            qa_revision_tasks = read_json(out / "agent_qa_revision_tasks.json")
+            self.assertEqual(qa_revision_tasks[0]["stage"], "qa_revision")
+            self.assertEqual(qa_revision_tasks[0]["output_paths"], [str(paths["qa"].resolve())])
+            self.assertEqual(qa_revision_tasks[0]["allowed_write_paths"], qa_revision_tasks[0]["output_paths"])
+
+            report_revision_tasks = read_json(out / "agent_report_revision_tasks.json")
+            self.assertEqual(report_revision_tasks[0]["stage"], "report_revision")
+            self.assertEqual(report_revision_tasks[0]["output_paths"], [str(paths["report"].resolve())])
+
+            grounding_revision_tasks = read_json(out / "agent_grounding_revision_tasks.json")
+            self.assertEqual(grounding_revision_tasks[0]["stage"], "grounding_revision")
+            self.assertEqual(grounding_revision_tasks[0]["output_paths"], [str(paths["grounding"].resolve())])
 
     def test_final_validation_requires_v2_cognition_schema(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -393,14 +464,7 @@ class ReportQualityGateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp)
             paths = make_agent_quality_run(out)
-            write_good_agent_outputs(paths)
-            paths["report"].write_text(
-                "# Talk One\n\n## 摘要\n\n总结。\n\n## 核心 Findings / Experiments / Insights\n\n发现。\n\n"
-                "## 逐页 PPT 解读\n\n### 第 1 张 PPT\n\n"
-                "综合来看，这页的作用是把可见 PPT 内容和讲者说明对齐起来，支撑本 talk 的问题动机、方法、实验或结论之一。\n\n"
-                "## QA\n\n碎片。\n",
-                encoding="utf-8",
-            )
+            write_bad_quality_outputs(paths)
             write_json(
                 out / "pipeline_state.json",
                 {
@@ -419,8 +483,68 @@ class ReportQualityGateTests(unittest.TestCase):
 
             self.assertEqual(result, 1)
             state = read_json(out / "pipeline_state.json")
-            self.assertEqual(state["blocked_gate"], "report_revision")
+            self.assertEqual(state["blocked_gate"], "report_quality_repair")
+            self.assertIn("agent_quality_repair_plan.json", state["task_manifests"])
+            self.assertIn("agent_slide_cognition_revision_tasks.json", state["task_manifests"])
+            self.assertIn("agent_qa_revision_tasks.json", state["task_manifests"])
             self.assertIn("agent_report_revision_tasks.json", state["task_manifests"])
+
+    def test_final_validation_of_completed_run_marks_report_quality_repair_status(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            paths = make_agent_quality_run(out)
+            write_bad_quality_outputs(paths)
+            write_json(
+                out / "pipeline_state.json",
+                {
+                    "source": "URL",
+                    "completed_stages": ["ingest", "asr", "slides", "dedupe", "segment", "report", "validate", "final"],
+                    "current_status": "completed",
+                    "blocked_gate": None,
+                    "next_allowed_command": "",
+                    "resume_command": "",
+                    "task_manifests": [],
+                    "human_message": "Pipeline completed.",
+                },
+            )
+
+            result = cli.main(["validate", "--out", str(out), "--phase", "final"])
+
+            self.assertEqual(result, 1)
+            state = read_json(out / "pipeline_state.json")
+            self.assertEqual(state["current_status"], "waiting_for_agent")
+            self.assertEqual(state["blocked_gate"], "report_quality_repair")
+            self.assertIn("agent_quality_repair_plan.json", state["task_manifests"])
+            self.assertFalse(read_json(out / "reports_manifest.json")["final_reports"])
+
+            stdout = io.StringIO()
+            with mock.patch("sys.stdout", stdout):
+                status_result = cli.main(["status", "--out", str(out)])
+            self.assertEqual(status_result, 0)
+            status_text = stdout.getvalue()
+            self.assertIn("Gate: report_quality_repair", status_text)
+            self.assertIn("Failed reports: 1", status_text)
+            self.assertIn("agent_slide_cognition_revision_tasks.json", status_text)
+            self.assertIn("agent_qa_revision_tasks.json", status_text)
+            self.assertIn("agent_report_revision_tasks.json", status_text)
+            self.assertIn("agent_grounding_revision_tasks.json", status_text)
+
+    def test_resume_report_quality_repair_completes_after_all_outputs_fixed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            paths = make_agent_quality_run(out)
+            write_bad_quality_outputs(paths)
+            cli.main(["validate", "--out", str(out), "--phase", "final"])
+            state = read_json(out / "pipeline_state.json")
+            self.assertEqual(state["blocked_gate"], "report_quality_repair")
+
+            write_good_agent_outputs(paths)
+            result = cli.main(["resume", "--out", str(out)])
+
+            self.assertEqual(result, 0)
+            completed = read_json(out / "pipeline_state.json")
+            self.assertEqual(completed["current_status"], "completed")
+            self.assertTrue(read_json(out / "reports_manifest.json")["final_reports"])
 
 
 if __name__ == "__main__":

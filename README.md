@@ -63,7 +63,13 @@ conference-report validate --out outputs/run --config outputs/run/config.yaml --
 
 The quality gate reads `reports_manifest.json`, `agent_slide_cognition_tasks.json`, `agent_qa_tasks.json`, `agent_report_tasks.json`, `agent_grounding_tasks.json`, the per-talk cognition/QA JSON, final Markdown reports, and grounding reviews. It writes `report_quality_validation.json` with per-report metrics and failure reasons.
 
-The gate checks for template repetition, repeated boilerplate sentences, OCR/ASR copy-through, missing v2 slide cognition fields, missing `qa_pairs`, shallow QA fragments, missing claim-level `checked_claims`, missing report sections, broken image links, and whether findings appear to use slide cognition/QA outputs. If quality fails, `reports_manifest.final_reports` stays `false` and the CLI writes `agent_report_revision_tasks.json`. The run pauses at `report_revision`; the agent must rewrite only the failed reports and grounding reviews listed in each revision task's `allowed_write_paths`, then run `validate --phase final` and `resume` again.
+The gate checks for template repetition, repeated boilerplate sentences, OCR/ASR copy-through, missing v2 slide cognition fields, missing `qa_pairs`, shallow QA fragments, missing claim-level `checked_claims`, missing report sections, broken image links, and whether findings appear to use slide cognition/QA outputs. If quality fails, `reports_manifest.final_reports` stays `false` and the CLI writes `agent_quality_repair_plan.json` plus staged repair manifests. The run pauses at `report_quality_repair`; the agent must complete repair tasks in this order, then run `validate --phase final` and `resume` again:
+
+```text
+slide_cognition_revision -> qa_revision -> report_revision -> grounding_revision
+```
+
+Repair manifests are intentionally scoped. `agent_slide_cognition_revision_tasks.json` may rewrite failed cognition JSON, `agent_qa_revision_tasks.json` writes canonical `qa_pairs.json`, `agent_report_revision_tasks.json` rewrites only failed Markdown reports, and `agent_grounding_revision_tasks.json` rewrites claim-level grounding reviews. Old completed runs can be audited too; a failed `validate --phase final` moves `pipeline_state.json` back to the repair gate instead of leaving a bad report marked complete.
 
 This makes the audit trail explicit: evidence and intermediate cognition are preserved, report failures are machine-readable, and agent hosts follow validate → revise → resume rather than guessing the next step from chat context.
 

@@ -19,7 +19,24 @@ TASK_REQUIRED_KEYS = {"task_id", "stage", "input_paths", "output_paths", "allowe
 REPORT_REQUIRED_SECTIONS = ["摘要", "核心 Findings / Experiments / Insights", "逐页 PPT 解读", "QA"]
 DEDUPE_REVIEW_TASK_MANIFEST = "dedupe/agent_review_tasks.json"
 REPORT_QUALITY_FILE = "report_quality_validation.json"
+QUALITY_REPAIR_PLAN_FILE = "agent_quality_repair_plan.json"
+SLIDE_COGNITION_REVISION_TASKS_FILE = "agent_slide_cognition_revision_tasks.json"
+QA_REVISION_TASKS_FILE = "agent_qa_revision_tasks.json"
 REVISION_TASKS_FILE = "agent_report_revision_tasks.json"
+GROUNDING_REVISION_TASKS_FILE = "agent_grounding_revision_tasks.json"
+
+QUALITY_REPAIR_STAGES = [
+    "slide_cognition_revision",
+    "qa_revision",
+    "report_revision",
+    "grounding_revision",
+]
+QUALITY_REPAIR_MANIFESTS = {
+    "slide_cognition_revision": SLIDE_COGNITION_REVISION_TASKS_FILE,
+    "qa_revision": QA_REVISION_TASKS_FILE,
+    "report_revision": REVISION_TASKS_FILE,
+    "grounding_revision": GROUNDING_REVISION_TASKS_FILE,
+}
 
 
 TEMPLATE_PHRASES = [
@@ -49,6 +66,27 @@ V2_GROUNDING_FIELDS = {
     "template_or_style_issues",
     "requires_revision",
     "confidence",
+}
+
+V2_SLIDE_COGNITION_SCHEMA = {
+    "visual_summary": "string",
+    "speaker_intent": "string",
+    "main_claims": "array",
+    "method_details": "array",
+    "experiment_or_result": "array",
+    "numbers_and_entities": "array",
+    "asr_corrections": "array",
+    "uncertainties": "array",
+    "confidence": "number",
+}
+V2_QA_SCHEMA = {"qa_pairs": "array", "uncertainties": "array", "confidence": "number"}
+V2_GROUNDING_SCHEMA = {
+    "checked_claims": "array",
+    "unsupported_claims": "array",
+    "missing_coverage": "array",
+    "template_or_style_issues": "array",
+    "requires_revision": "boolean",
+    "confidence": "number",
 }
 
 
@@ -455,6 +493,45 @@ def report_task_evidence_path(task: dict[str, Any]) -> Path | None:
     return None
 
 
+def talk_dir_for_report_task(task: dict[str, Any]) -> Path | None:
+    if task.get("talk_dir"):
+        return Path(str(task["talk_dir"]))
+    evidence_path = report_task_evidence_path(task)
+    if evidence_path is not None:
+        return evidence_path.parent
+    for path in task.get("input_paths", []):
+        candidate = Path(str(path))
+        if candidate.name in {"metadata.json", "timeline.txt", "evidence.json"}:
+            return candidate.parent
+    return None
+
+
+def canonical_qa_path(report_task: dict[str, Any], qa_tasks: list[dict[str, Any]]) -> Path | None:
+    talk_dir = talk_dir_for_report_task(report_task)
+    if talk_dir is not None:
+        return talk_dir / "qa" / "qa_pairs.json"
+    for task in qa_tasks:
+        for output in task.get("output_paths", []):
+            candidate = Path(str(output))
+            if candidate.name == "qa_pairs.json":
+                return candidate
+    return None
+
+
+def existing_or_manifest_qa_paths(report_task: dict[str, Any], qa_tasks: list[dict[str, Any]]) -> list[Path]:
+    paths: list[Path] = []
+    canonical = canonical_qa_path(report_task, qa_tasks)
+    if canonical is not None and canonical.exists():
+        paths.append(canonical)
+    if not paths:
+        for task in qa_tasks:
+            for output in task.get("output_paths", []):
+                path = Path(str(output))
+                if path not in paths:
+                    paths.append(path)
+    return paths
+
+
 def evidence_copy_and_coverage_errors(text: str, evidence_path: Path | None) -> tuple[list[str], dict[str, Any]]:
     if evidence_path is None or not evidence_path.exists():
         return [], {}
@@ -495,11 +572,20 @@ def evidence_copy_and_coverage_errors(text: str, evidence_path: Path | None) -> 
     return errors, metrics
 
 
-def write_revision_tasks(out_dir: Path, report_results: list[dict[str, Any]], grouped_tasks: dict[str, dict[str, list[dict[str, Any]]]]) -> None:
+def repair_plan_command(out_dir: Path, command: str) -> str:
+    return f"conference-report {command} --out {out_dir} --phase final" if command == "validate" else f"conference-report {command} --out {out_dir}"
+
+
+def write_quality_repair_tasks(out_dir: Path, report_results: list[dict[str, Any]], grouped_tasks: dict[str, dict[str, list[dict[str, Any]]]]) -> None:
     quality_path = (out_dir / REPORT_QUALITY_FILE).resolve()
-    revision_tasks: list[dict[str, Any]] = []
+    cognition_revision_tasks: list[dict[str, Any]] = []
+    qa_revision_tasks: list[dict[str, Any]] = []
+    report_revision_tasks: list[dict[str, Any]] = []
+    grounding_revision_tasks: list[dict[str, Any]] = []
     grounding_by_slug = grouped_tasks.get("grounding_review", {})
     report_by_slug = grouped_tasks.get("report_write", {})
+    cognition_by_slug = grouped_tasks.get("slide_cognition", {})
+    qa_by_slug = grouped_tasks.get("qa_detection", {})
     for result in report_results:
         if result.get("ok"):
             continue
@@ -508,32 +594,155 @@ def write_revision_tasks(out_dir: Path, report_results: list[dict[str, Any]], gr
         if not report_tasks:
             continue
         report_task = report_tasks[0]
-        grounding_outputs = []
-        for task in grounding_by_slug.get(slug, []):
-            grounding_outputs.extend(task.get("output_paths", []))
-        output_paths = list(report_task.get("output_paths", [])) + grounding_outputs
-        revision_tasks.append(
+        title = report_task.get("title", slug)
+        issue_types = set(result.get("issue_types") or [])
+        cognition_tasks = cognition_by_slug.get(slug, [])
+        qa_tasks = qa_by_slug.get(slug, [])
+        cognition_outputs = [str(output) for task in cognition_tasks for output in task.get("output_paths", [])]
+        canonical_qa = canonical_qa_path(report_task, qa_tasks)
+        qa_outputs = [str(canonical_qa.resolve())] if canonical_qa is not None else [str(output) for task in qa_tasks for output in task.get("output_paths", [])]
+        report_outputs = list(report_task.get("output_paths", []))
+        grounding_tasks = grounding_by_slug.get(slug, [])
+        grounding_outputs = [str(output) for task in grounding_tasks for output in task.get("output_paths", [])]
+        if "cognition_revision_required" in issue_types and cognition_outputs:
+            cognition_inputs: list[str] = [str(quality_path)]
+            for task in cognition_tasks:
+                for input_path in task.get("input_paths", []):
+                    if input_path not in cognition_inputs:
+                        cognition_inputs.append(str(input_path))
+            cognition_revision_tasks.append(
+                {
+                    "task_id": f"slide-cognition-revision:{slug}",
+                    "stage": "slide_cognition_revision",
+                    "slug": slug,
+                    "title": title,
+                    "input_paths": cognition_inputs,
+                    "dependency_output_paths": [],
+                    "output_paths": cognition_outputs,
+                    "allowed_write_paths": cognition_outputs,
+                    "required_schema": V2_SLIDE_COGNITION_SCHEMA,
+                    "validation_rules": [
+                        {"type": "json_fields", "required": sorted(V2_SLIDE_COGNITION_FIELDS)},
+                        {"type": "semantic_depth"},
+                        {"type": "allowed_writes"},
+                    ],
+                    "quality_errors": result.get("cognition_errors", [])[:8],
+                    "done_condition": "Rewrite all listed slide_cognition JSON files with v2 semantic fields before QA/report revision.",
+                }
+            )
+        if "qa_revision_required" in issue_types and qa_outputs:
+            qa_inputs: list[str] = [str(quality_path)]
+            for task in qa_tasks:
+                for input_path in task.get("input_paths", []):
+                    if input_path not in qa_inputs:
+                        qa_inputs.append(str(input_path))
+            qa_revision_tasks.append(
+                {
+                    "task_id": f"qa-revision:{slug}",
+                    "stage": "qa_revision",
+                    "slug": slug,
+                    "title": title,
+                    "input_paths": qa_inputs,
+                    "dependency_output_paths": cognition_outputs,
+                    "output_paths": qa_outputs,
+                    "allowed_write_paths": qa_outputs,
+                    "required_schema": V2_QA_SCHEMA,
+                    "validation_rules": [
+                        {"type": "json_fields", "required": sorted(V2_QA_FIELDS)},
+                        {"type": "qa_pair_schema", "required": ["question", "answer", "time_range", "evidence_quotes", "confidence"]},
+                        {"type": "allowed_writes"},
+                    ],
+                    "quality_errors": result.get("qa_errors", [])[:8],
+                    "done_condition": "Write canonical qa_pairs.json; do not list transcript fragments as QA pairs.",
+                }
+            )
+        if "report_revision_required" in issue_types and report_outputs:
+            report_revision_tasks.append(
+                {
+                    "task_id": f"report-revision:{slug}",
+                    "stage": "report_revision",
+                    "slug": slug,
+                    "title": title,
+                    "input_paths": list(report_task.get("input_paths", [])) + [str(quality_path)],
+                    "dependency_output_paths": cognition_outputs + qa_outputs,
+                    "output_paths": report_outputs,
+                    "allowed_write_paths": report_outputs,
+                    "required_sections": report_task.get("required_sections", REPORT_REQUIRED_SECTIONS),
+                    "validation_rules": [
+                        {"type": "exists", "paths": "output_paths"},
+                        {"type": "markdown_required_sections", "sections": report_task.get("required_sections", REPORT_REQUIRED_SECTIONS)},
+                        {"type": "report_quality"},
+                        {"type": "allowed_writes"},
+                    ],
+                    "quality_errors": result.get("report_errors", [])[:8],
+                    "done_condition": "Rewrite only this Markdown report after cognition and QA revisions are complete.",
+                }
+            )
+        if "grounding_revision_required" in issue_types and grounding_outputs:
+            grounding_inputs: list[str] = [str(quality_path)]
+            for task in grounding_tasks:
+                for input_path in task.get("input_paths", []):
+                    if input_path not in grounding_inputs:
+                        grounding_inputs.append(str(input_path))
+            grounding_revision_tasks.append(
+                {
+                    "task_id": f"grounding-revision:{slug}",
+                    "stage": "grounding_revision",
+                    "slug": slug,
+                    "title": title,
+                    "input_paths": grounding_inputs,
+                    "dependency_output_paths": report_outputs + cognition_outputs + qa_outputs,
+                    "output_paths": grounding_outputs,
+                    "allowed_write_paths": grounding_outputs,
+                    "required_schema": V2_GROUNDING_SCHEMA,
+                    "validation_rules": [
+                        {"type": "json_fields", "required": sorted(V2_GROUNDING_FIELDS)},
+                        {"type": "claim_level_review"},
+                        {"type": "allowed_writes"},
+                    ],
+                    "quality_errors": result.get("grounding_errors", [])[:8],
+                    "done_condition": "Rewrite grounding review with non-empty checked_claims after the report has been revised.",
+                }
+            )
+    manifests = {
+        "slide_cognition_revision": SLIDE_COGNITION_REVISION_TASKS_FILE,
+        "qa_revision": QA_REVISION_TASKS_FILE,
+        "report_revision": REVISION_TASKS_FILE,
+        "grounding_revision": GROUNDING_REVISION_TASKS_FILE,
+    }
+    write_json(out_dir / SLIDE_COGNITION_REVISION_TASKS_FILE, cognition_revision_tasks)
+    write_json(out_dir / QA_REVISION_TASKS_FILE, qa_revision_tasks)
+    write_json(out_dir / REVISION_TASKS_FILE, report_revision_tasks)
+    write_json(out_dir / GROUNDING_REVISION_TASKS_FILE, grounding_revision_tasks)
+    failed_reports = [item for item in report_results if not item.get("ok")]
+    plan = {
+        "blocked_gate": "report_quality_repair",
+        "stages": QUALITY_REPAIR_STAGES,
+        "reason": "report-quality failed" if failed_reports else "",
+        "failed_reports": [
             {
-                "task_id": f"report-revision:{slug}",
-                "stage": "report_revision",
-                "slug": slug,
-                "title": report_task.get("title", slug),
-                "input_paths": list(report_task.get("input_paths", [])) + [str(quality_path)],
-                "dependency_output_paths": list(report_task.get("dependency_output_paths", [])),
-                "output_paths": output_paths,
-                "allowed_write_paths": output_paths,
-                "required_sections": report_task.get("required_sections", REPORT_REQUIRED_SECTIONS),
-                "validation_rules": [
-                    {"type": "exists", "paths": "output_paths"},
-                    {"type": "markdown_required_sections", "sections": report_task.get("required_sections", REPORT_REQUIRED_SECTIONS)},
-                    {"type": "report_quality"},
-                    {"type": "allowed_writes"},
-                ],
-                "quality_errors": result.get("errors", [])[:5],
-                "done_condition": "Rewrite only this report and its grounding review, then rerun validate --phase final.",
+                "slug": item.get("slug"),
+                "report_path": item.get("report_path"),
+                "issue_types": item.get("issue_types", []),
+                "first_errors": item.get("errors", [])[:5],
             }
-        )
-    write_json(out_dir / REVISION_TASKS_FILE, revision_tasks)
+            for item in failed_reports
+        ],
+        "task_manifests": manifests,
+        "repair_task_counts": {
+            "slide_cognition_revision": len(cognition_revision_tasks),
+            "qa_revision": len(qa_revision_tasks),
+            "report_revision": len(report_revision_tasks),
+            "grounding_revision": len(grounding_revision_tasks),
+        },
+        "next_allowed_command": repair_plan_command(out_dir, "validate"),
+        "resume_command": repair_plan_command(out_dir, "resume"),
+    }
+    write_json(out_dir / QUALITY_REPAIR_PLAN_FILE, plan)
+
+
+def write_revision_tasks(out_dir: Path, report_results: list[dict[str, Any]], grouped_tasks: dict[str, dict[str, list[dict[str, Any]]]]) -> None:
+    write_quality_repair_tasks(out_dir, report_results, grouped_tasks)
 
 
 def validate_report_quality(out_dir: Path, errors: list[str]) -> dict[str, Any]:
@@ -549,40 +758,59 @@ def validate_report_quality(out_dir: Path, errors: list[str]) -> dict[str, Any]:
     for report_task in [task for tasks in grouped.get("report_write", {}).values() for task in tasks]:
         slug = str(report_task.get("slug", ""))
         report_path = Path(str(report_task.get("report_path") or (report_task.get("output_paths") or [""])[0]))
-        report_errors: list[str] = []
+        cognition_errors: list[str] = []
+        qa_errors: list[str] = []
+        grounding_errors: list[str] = []
+        report_content_errors: list[str] = []
         metrics: dict[str, Any] = {}
         cognition_paths = [Path(str(output)) for task in grouped.get("slide_cognition", {}).get(slug, []) for output in task.get("output_paths", [])]
-        qa_paths = [Path(str(output)) for task in grouped.get("qa_detection", {}).get(slug, []) for output in task.get("output_paths", [])]
+        qa_tasks = grouped.get("qa_detection", {}).get(slug, [])
+        qa_paths = existing_or_manifest_qa_paths(report_task, qa_tasks)
         grounding_paths = [Path(str(output)) for task in grouped.get("grounding_review", {}).get(slug, []) for output in task.get("output_paths", [])]
         for path in cognition_paths:
-            report_errors.extend(validate_cognition_quality(path))
+            cognition_errors.extend(validate_cognition_quality(path))
         for path in qa_paths:
-            report_errors.extend(validate_qa_quality(path))
+            qa_errors.extend(validate_qa_quality(path))
         for path in grounding_paths:
-            report_errors.extend(validate_grounding_quality(path))
+            grounding_errors.extend(validate_grounding_quality(path))
         if not report_path.exists():
-            report_errors.append(f"Missing report for quality validation: {report_path}")
+            report_content_errors.append(f"Missing report for quality validation: {report_path}")
         else:
             text = report_path.read_text(encoding="utf-8", errors="ignore")
             for section in missing_markdown_sections(report_path, REPORT_REQUIRED_SECTIONS):
-                report_errors.append(f"Missing required section {section} in {report_path}")
-            report_errors.extend(markdown_image_errors(report_path))
+                report_content_errors.append(f"Missing required section {section} in {report_path}")
+            report_content_errors.extend(markdown_image_errors(report_path))
             evidence_errors, evidence_metrics = evidence_copy_and_coverage_errors(text, report_task_evidence_path(report_task))
-            report_errors.extend(evidence_errors)
+            report_content_errors.extend(evidence_errors)
             metrics.update(evidence_metrics)
             template_errors, template_metrics = report_template_errors(text, len(cognition_paths))
-            report_errors.extend(template_errors)
+            report_content_errors.extend(template_errors)
             metrics.update(template_metrics)
             if cognition_paths and not report_uses_cognition(text, cognition_paths):
-                report_errors.append(f"report does not appear to use slide_cognition claims for {slug}")
+                report_content_errors.append(f"report does not appear to use slide_cognition claims for {slug}")
             if qa_paths and not report_uses_qa_pairs(text, qa_paths):
-                report_errors.append(f"report QA section does not appear to use qa_pairs for {slug}")
+                report_content_errors.append(f"report QA section does not appear to use qa_pairs for {slug}")
+        issue_types: list[str] = []
+        if cognition_errors:
+            issue_types.append("cognition_revision_required")
+        if qa_errors:
+            issue_types.append("qa_revision_required")
+        if report_content_errors:
+            issue_types.append("report_revision_required")
+        if grounding_errors:
+            issue_types.append("grounding_revision_required")
+        report_errors = cognition_errors + qa_errors + report_content_errors + grounding_errors
         report_results.append(
             {
                 "slug": slug,
                 "report_path": str(report_path),
                 "ok": not report_errors,
                 "errors": report_errors,
+                "issue_types": issue_types,
+                "cognition_errors": cognition_errors,
+                "qa_errors": qa_errors,
+                "report_errors": report_content_errors,
+                "grounding_errors": grounding_errors,
                 "metrics": metrics,
             }
         )
@@ -601,7 +829,7 @@ def validate_report_quality(out_dir: Path, errors: list[str]) -> dict[str, Any]:
     write_json(out_dir / "reports_manifest.json", reports_manifest)
     result = {"ok": ok, "phase": "report-quality", "reports": report_results, "manifest_errors": local_errors}
     write_json(out_dir / REPORT_QUALITY_FILE, result)
-    write_revision_tasks(out_dir, report_results, grouped)
+    write_quality_repair_tasks(out_dir, report_results, grouped)
     return result
 
 

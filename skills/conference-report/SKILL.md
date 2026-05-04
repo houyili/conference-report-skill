@@ -132,7 +132,20 @@ After each stage, the parent agent may rerun the task validation phase. After al
 "$CLI" resume --out "$RUN" --config "$RUN/config.yaml"
 ```
 
-If `--phase final` fails quality checks, the CLI writes `report_quality_validation.json`, creates `agent_report_revision_tasks.json`, and blocks at the `report_revision` gate. Follow validate → revise → resume: read the revision tasks, fix only failed reports and grounding reviews listed in `allowed_write_paths`, rerun `validate --phase final`, then run `resume`.
+If `--phase final` fails quality checks, the CLI writes `report_quality_validation.json`, creates `agent_quality_repair_plan.json`, and blocks at the `report_quality_repair` gate. Follow validate → revise → resume: read the repair plan, complete the listed manifests in this exact order, rerun `validate --phase final`, then run `resume`.
+
+```text
+slide_cognition_revision -> qa_revision -> report_revision -> grounding_revision
+```
+
+Repair manifests may include:
+
+- `agent_slide_cognition_revision_tasks.json`: rewrite failed `slide_cognition/*.json` files with v2 semantic fields.
+- `agent_qa_revision_tasks.json`: write canonical `qa/qa_pairs.json`; old `qa_candidates.json` fragments are not enough.
+- `agent_report_revision_tasks.json`: rewrite only failed Markdown reports after cognition and QA are fixed.
+- `agent_grounding_revision_tasks.json`: rewrite claim-level grounding reviews after reports are fixed.
+
+Do not only rewrite the report if `agent_quality_repair_plan.json` lists upstream cognition or QA revision tasks. Old completed runs can also be audited with `validate --phase final`; if quality fails, the CLI will write the same repair plan and move `pipeline_state.json` back to a waiting `report_quality_repair` gate.
 
 If `--phase final` fails for any reason, do not claim final reports are complete. Read `validation.json`, `agent_task_validation.json`, and `report_quality_validation.json` when present; fix only the failed task outputs permitted by `allowed_write_paths`, and rerun final validation.
 
@@ -174,7 +187,11 @@ Each run directory should contain:
 - `agent_grounding_tasks.json`: one bounded grounding review task per final report
 - `agent_task_validation.json`: machine-readable status for task contract or final-output validation
 - `report_quality_validation.json`: quality audit for agent-written reports
-- `agent_report_revision_tasks.json`: bounded rewrite tasks created when report quality fails
+- `agent_quality_repair_plan.json`: ordered repair plan created when report quality fails
+- `agent_slide_cognition_revision_tasks.json`: bounded cognition repair tasks
+- `agent_qa_revision_tasks.json`: bounded QA pair repair tasks
+- `agent_report_revision_tasks.json`: bounded report rewrite tasks
+- `agent_grounding_revision_tasks.json`: bounded grounding review repair tasks
 - `pipeline_state.json`: current gate, task manifests, next validation command, and resume command when a run is paused
 - `reports/<talk_slug>.md`: final report written by subagents/OpenAI, or clearly marked evidence bundle
 - `reports/<talk_slug>.grounding.json`: persistent grounding review for the final report

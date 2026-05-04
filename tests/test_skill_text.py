@@ -67,7 +67,12 @@ class ConferenceReportSkillTextTests(unittest.TestCase):
         text = SKILL_PATH.read_text(encoding="utf-8")
 
         self.assertIn("--phase report-quality", text)
+        self.assertIn("report_quality_repair", text)
+        self.assertIn("agent_quality_repair_plan.json", text)
+        self.assertIn("slide_cognition_revision", text)
+        self.assertIn("qa_revision", text)
         self.assertIn("report_revision", text)
+        self.assertIn("grounding_revision", text)
         self.assertIn("不要把 OCR/ASR 机械填进报告", text)
         self.assertIn("validate → revise → resume", text)
 

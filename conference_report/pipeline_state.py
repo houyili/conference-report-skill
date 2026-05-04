@@ -54,6 +54,24 @@ GATE_MESSAGES = {
             "验证通过后运行 resume。",
         ],
     },
+    "report_quality_repair": {
+        "label": "report quality repair",
+        "validate_phase": "final",
+        "task_manifests": [
+            "agent_quality_repair_plan.json",
+            "agent_slide_cognition_revision_tasks.json",
+            "agent_qa_revision_tasks.json",
+            "agent_report_revision_tasks.json",
+            "agent_grounding_revision_tasks.json",
+        ],
+        "instructions": [
+            "读取 agent_quality_repair_plan.json。",
+            "按 slide_cognition_revision、qa_revision、report_revision、grounding_revision 顺序完成 task manifests。",
+            "每个任务只写 allowed_write_paths 中列出的文件。",
+            "完成后运行 validate --phase final。",
+            "验证通过后运行 resume。",
+        ],
+    },
 }
 
 
@@ -142,6 +160,8 @@ def format_state_for_human(state: dict[str, Any] | None) -> str:
         f"Completed stages: {', '.join(state.get('completed_stages') or [])}",
     ]
     task_manifests = state.get("task_manifests") or []
+    if state.get("failed_report_count") is not None:
+        lines.append(f"Failed reports: {state['failed_report_count']}")
     if task_manifests:
         lines.append("Task manifests:")
         lines.extend(f"- {item}" for item in task_manifests)
