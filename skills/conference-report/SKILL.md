@@ -35,10 +35,11 @@ Then run:
   --out outputs/<run-name> \
   --config config.example.yaml \
   --writer agent \
+  --agent-gates dedupe,report \
   --cookies-from-browser chrome
 ```
 
-Agent-hosted use does not require an OpenAI API key. The CLI prepares evidence plus deterministic JSON task manifests; the host agent only executes those tasks and writes the exact files named in each task's `allowed_write_paths`.
+Agent-hosted use does not require an OpenAI API key. The CLI prepares evidence plus deterministic JSON task manifests; the host agent only executes the current gate's tasks and writes the exact files named in each task's `allowed_write_paths`.
 
 Developer-only source checkout debugging may use the package module form, but this is not a use-stage path:
 
@@ -50,9 +51,37 @@ python -m conference_report.cli build "$URL" \
 
 Use `--writer openai` only for pure CLI writing with the user's own `OPENAI_API_KEY` or credential store. Use `--writer evidence` or legacy `--dry-run-report` only when the user explicitly wants evidence bundles instead of final reports.
 
+## Agent Gates
+
+Agent 不决定下一步。The CLI is the workflow controller: it runs deterministic Python stages until an agent/VLM gate is reached, writes `pipeline_state.json`, prints the next command, then stops. Do not guess the next stage from context.
+
+When a run is paused, inspect the state:
+
+```bash
+"$CLI" status --out outputs/<run-name>
+```
+
+The equivalent literal commands are `conference-report status --out outputs/<run-name>` and `conference-report resume --out outputs/<run-name> --config config.example.yaml` when `conference-report` is visible on `PATH`.
+
+Only execute the task manifests named in `pipeline_state.json`. After writing every task output, validate the current gate, then resume:
+
+```bash
+"$CLI" validate --out outputs/<run-name> --config config.example.yaml --phase dedupe-review
+"$CLI" resume --out outputs/<run-name> --config config.example.yaml
+```
+
+For report writing, final validation is the gate check:
+
+```bash
+"$CLI" validate --out outputs/<run-name> --config config.example.yaml --phase final
+"$CLI" resume --out outputs/<run-name> --config config.example.yaml
+```
+
+If the CLI refuses a command because the run is blocked, 不要猜下一步. Read `pipeline_state.json`, complete the listed task manifests, run the printed `validate` command, then run the printed `resume` command.
+
 ## Agent-Native Writing
 
-After the CLI finishes with `--writer agent`, first validate the generated task contracts:
+When the CLI stops at the `report_agent` gate, first validate the generated task contracts if the state output asks for it:
 
 ```bash
 "$CLI" validate --out outputs/<run-name> --config config.example.yaml --phase agent-tasks
@@ -78,11 +107,12 @@ Every task is self-contained. Give the worker only the JSON task object and its 
 
 Workers must not edit shared manifests, source files, credentials, cookies, unrelated outputs, or any path not listed in `allowed_write_paths`. Report-writing tasks must write final Markdown reports with the required report structure below.
 
-After each stage, the parent agent may rerun the task validation phase. After all stages finish, final validation is mandatory:
+After each stage, the parent agent may rerun the task validation phase. After all stages finish, final validation and resume are mandatory:
 
 ```bash
 "$CLI" validate --out outputs/<run-name> --config config.example.yaml --phase agent-tasks
 "$CLI" validate --out outputs/<run-name> --config config.example.yaml --phase final
+"$CLI" resume --out outputs/<run-name> --config config.example.yaml
 ```
 
 If `--phase final` fails, do not claim final reports are complete. Read `validation.json` and `agent_task_validation.json`, fix only the failed task outputs permitted by `allowed_write_paths`, and rerun final validation.
@@ -94,7 +124,7 @@ Run stages in order when debugging:
 1. `ingest`: save metadata, subtitles, and authorized page dumps with `yt-dlp`.
 2. `asr`: prefer platform subtitles; preserve audio/WAV when `asr.save_audio` is enabled; fall back to local `faster-whisper` or OpenAI transcription if configured.
 3. `slides`: prefer slide metadata; otherwise extract screenshots from video.
-4. `dedupe`: preserve originals, cluster repeated slides, record `main_interval` plus `all_intervals`, and optionally emit local semantic embedding candidates for agent/VLM review.
+4. `dedupe`: preserve originals, cluster repeated slides, record `main_interval` plus `all_intervals`, and optionally stop at a `dedupe-review` gate with local semantic embedding candidates for agent/VLM review.
 5. `segment`: parse the schedule first, align actual talk starts to transcript cues, and skip coffee/poster/lunch/break segments.
 6. `report`: create per-talk evidence and agent writing tasks, or write reports with an explicit writer backend.
 7. `validate`: run `evidence`, `agent-tasks`, or `final` phase checks. Final validation checks task outputs, required report sections, JSON schemas, and Markdown image links.
@@ -124,6 +154,7 @@ Each run directory should contain:
 - `agent_report_tasks.json`: one bounded report-writing task per reportable talk/topic
 - `agent_grounding_tasks.json`: one bounded grounding review task per final report
 - `agent_task_validation.json`: machine-readable status for task contract or final-output validation
+- `pipeline_state.json`: current gate, task manifests, next validation command, and resume command when a run is paused
 - `reports/<talk_slug>.md`: final report written by subagents/OpenAI, or clearly marked evidence bundle
 - `reports/<talk_slug>.grounding.json`: persistent grounding review for the final report
 

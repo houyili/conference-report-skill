@@ -23,6 +23,8 @@ slides_dedup/                # representative slide PNGs
 embeddings/slides/           # optional local semantic embedding cache
 dedupe/semantic_candidates.json
 dedupe/agent_review_tasks.json
+dedupe/agent_review_validation.json
+dedupe/agent_review_apply_manifest.json
 dedup_groups.json            # provenance-preserving visual clusters
 slide_intervals.json/csv     # slide start/end and repeated occurrence intervals
 segmentation/talks.json      # talk/keynote/panel boundaries
@@ -33,6 +35,7 @@ agent_qa_tasks.json
 agent_report_tasks.json
 agent_grounding_tasks.json
 agent_task_validation.json
+pipeline_state.json          # current agent gate and next validate/resume commands
 reports/<talk_slug>.md       # final Chinese report, or evidence bundle when requested
 reports/<talk_slug>.grounding.json
 manifest.json
@@ -271,8 +274,21 @@ The tool asks `yt-dlp` to read cookies from your local browser session. It does 
 .venv/bin/conference-report build URL \
   --out outputs/run-name \
   --config config.example.yaml \
-  --writer auto
+  --writer agent \
+  --agent-gates dedupe,report
 ```
+
+With `--writer agent`, the CLI uses the host agent's LLM/VLM instead of requiring an OpenAI key for report writing. With `--agent-gates dedupe,report`, the CLI stops at agent review gates, writes `pipeline_state.json`, and prints the exact next command. Complete only the listed task manifests, then validate and resume:
+
+```bash
+conference-report status --out outputs/run-name
+conference-report validate --out outputs/run-name --config config.example.yaml --phase dedupe-review
+conference-report resume --out outputs/run-name --config config.example.yaml
+conference-report validate --out outputs/run-name --config config.example.yaml --phase final
+conference-report resume --out outputs/run-name --config config.example.yaml
+```
+
+If a command is refused because a gate is waiting, do not skip ahead. Read `pipeline_state.json`, finish the current gate's outputs, validate, then resume.
 
 Useful subcommands:
 
@@ -283,14 +299,17 @@ conference-report slides --out outputs/run --config config.example.yaml
 conference-report dedupe --out outputs/run --config config.example.yaml
 conference-report segment --out outputs/run --config config.example.yaml
 conference-report report --out outputs/run --config config.example.yaml
+conference-report status --out outputs/run
+conference-report resume --out outputs/run --config config.example.yaml
 conference-report validate --out outputs/run --config config.example.yaml --phase evidence
+conference-report validate --out outputs/run --config config.example.yaml --phase dedupe-review
 conference-report validate --out outputs/run --config config.example.yaml --phase agent-tasks
 conference-report validate --out outputs/run --config config.example.yaml --phase final
 ```
 
 Writer modes:
 
-- `--writer agent`: prepare deterministic task manifests; the host skill executes only those JSON tasks, writes only `allowed_write_paths`, and uses `validate --phase final` as the completion gate. This is the default skill path and does not require an OpenAI API key.
+- `--writer agent`: prepare deterministic task manifests; the host skill executes only those JSON tasks, writes only `allowed_write_paths`, and uses `validate --phase final` plus `resume` as the completion gate. This is the default skill path and does not require an OpenAI API key.
 - `--writer openai`: pure CLI automated writing with the user's own OpenAI API key.
 - `--writer evidence`: write evidence bundles only.
 - `--writer auto`: pure CLI default; use OpenAI when a key exists, otherwise evidence bundles.

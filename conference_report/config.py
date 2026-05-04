@@ -38,6 +38,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "mean_threshold": 1.2,
         "changed_threshold": 0.006,
         "hash_threshold": 6,
+        "agent_merge_confidence_threshold": 0.75,
     },
     "embeddings": {
         "enabled": True,

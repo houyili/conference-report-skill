@@ -41,6 +41,17 @@ class ConferenceReportSkillTextTests(unittest.TestCase):
         self.assertIn("--phase final", text)
         self.assertIn("sequential", text.lower())
 
+    def test_skill_documents_agent_gates_validate_then_resume(self):
+        text = SKILL_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("--agent-gates dedupe,report", text)
+        self.assertIn("conference-report status", text)
+        self.assertIn("conference-report resume", text)
+        self.assertIn("--phase dedupe-review", text)
+        self.assertIn("Agent 不决定下一步", text)
+        self.assertIn("不要猜下一步", text)
+        self.assertNotIn("/Users/jyxc-dz-0100301", text)
+
 
 if __name__ == "__main__":
     unittest.main()

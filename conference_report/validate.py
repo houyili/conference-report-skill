@@ -8,7 +8,7 @@ from urllib.parse import unquote
 from .utils import read_json, timeline_lines, write_json
 
 
-VALIDATION_PHASES = {"evidence", "agent-tasks", "final"}
+VALIDATION_PHASES = {"evidence", "dedupe-review", "agent-tasks", "final"}
 TASK_MANIFESTS = {
     "slide_cognition": "agent_slide_cognition_tasks.json",
     "qa_detection": "agent_qa_tasks.json",
@@ -17,6 +17,15 @@ TASK_MANIFESTS = {
 }
 TASK_REQUIRED_KEYS = {"task_id", "stage", "input_paths", "output_paths", "allowed_write_paths", "validation_rules"}
 REPORT_REQUIRED_SECTIONS = ["摘要", "核心 Findings / Experiments / Insights", "逐页 PPT 解读", "QA"]
+DEDUPE_REVIEW_TASK_MANIFEST = "dedupe/agent_review_tasks.json"
+
+
+JSON_SCHEMA_TYPES = {
+    "string": str,
+    "array": list,
+    "number": (int, float),
+    "boolean": bool,
+}
 
 
 def normalize_path(path: str | Path) -> str:
@@ -69,6 +78,23 @@ def validate_json_schema(path: Path, stage: str) -> list[str]:
     else:
         return errors
     for key, expected_type in required.items():
+        if key not in data:
+            errors.append(f"Missing required JSON field {key} in {path}")
+        elif not isinstance(data[key], expected_type):
+            errors.append(f"Invalid JSON field {key} in {path}")
+    return errors
+
+
+def validate_declared_json_schema(path: Path, schema: dict[str, str]) -> list[str]:
+    errors: list[str] = []
+    try:
+        data = read_json(path)
+    except Exception as exc:
+        return [f"Invalid JSON task output {path}: {exc}"]
+    for key, expected_name in schema.items():
+        expected_type = JSON_SCHEMA_TYPES.get(str(expected_name))
+        if expected_type is None:
+            continue
         if key not in data:
             errors.append(f"Missing required JSON field {key} in {path}")
         elif not isinstance(data[key], expected_type):
@@ -132,9 +158,42 @@ def validate_task_contract(task: dict[str, Any], *, final: bool) -> dict[str, An
                     if section in missing_markdown_sections(output_path, [str(section)]):
                         task_errors.append(f"Missing required section {section} in {output}")
                 task_errors.extend(markdown_image_errors(output_path))
+            elif isinstance(task.get("required_schema"), dict):
+                task_errors.extend(validate_declared_json_schema(output_path, task["required_schema"]))
             else:
                 task_errors.extend(validate_json_schema(output_path, stage))
     return {"task_id": task_id, "stage": stage, "ok": not task_errors, "errors": task_errors}
+
+
+def validate_dedupe_review_tasks(out_dir: Path, errors: list[str]) -> dict[str, Any]:
+    manifest_path = out_dir / DEDUPE_REVIEW_TASK_MANIFEST
+    if not manifest_path.exists():
+        errors.append(f"Missing {DEDUPE_REVIEW_TASK_MANIFEST}")
+        result = {"ok": False, "phase": "dedupe-review", "tasks": [], "manifest_errors": errors[:]}
+        write_json(out_dir / "dedupe" / "agent_review_validation.json", result)
+        return result
+    try:
+        tasks = read_json(manifest_path)
+    except Exception as exc:
+        errors.append(f"Invalid {DEDUPE_REVIEW_TASK_MANIFEST}: {exc}")
+        tasks = []
+    if not isinstance(tasks, list):
+        errors.append(f"{DEDUPE_REVIEW_TASK_MANIFEST} must be a list")
+        tasks = []
+    task_results = [validate_task_contract(task, final=True) for task in tasks if isinstance(task, dict)]
+    for task in tasks:
+        if not isinstance(task, dict):
+            errors.append(f"{DEDUPE_REVIEW_TASK_MANIFEST} contains a non-object task")
+    for result in task_results:
+        errors.extend(result["errors"])
+    result = {
+        "ok": not errors and all(item["ok"] for item in task_results),
+        "phase": "dedupe-review",
+        "tasks": task_results,
+        "manifest_errors": errors[:],
+    }
+    write_json(out_dir / "dedupe" / "agent_review_validation.json", result)
+    return result
 
 
 def validate_agent_tasks(out_dir: Path, *, phase: str, errors: list[str]) -> dict[str, Any]:
@@ -224,7 +283,10 @@ def validate_run(out_dir: Path, phase: str = "evidence") -> dict[str, Any]:
     errors: list[str] = []
     warnings: list[str] = []
 
-    validate_evidence(out_dir, errors, warnings)
+    if phase == "dedupe-review":
+        validate_dedupe_review_tasks(out_dir, errors)
+    else:
+        validate_evidence(out_dir, errors, warnings)
     if phase in {"agent-tasks", "final"}:
         validate_agent_tasks(out_dir, phase=phase, errors=errors)
     validate_existing_report_links(out_dir, warnings, strict=phase == "final", errors=errors)

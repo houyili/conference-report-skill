@@ -10,7 +10,7 @@ from typing import Any
 from PIL import Image, ImageChops, ImageStat
 
 from .embeddings import run_semantic_dedupe_artifacts
-from .utils import ensure_dir, extract_time_from_name, format_time, list_pngs, parse_time_seconds, timeline_lines, write_json
+from .utils import ensure_dir, extract_time_from_name, format_time, list_pngs, parse_time_seconds, read_json, timeline_lines, write_json
 
 
 @dataclass
@@ -136,8 +136,13 @@ def build_groups(rows: list[dict[str, Any]], intervals: list[dict[str, Any]]) ->
 
 def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
     ensure_dir(path.parent)
+    fields: list[str] = []
+    for row in rows:
+        for key in row.keys():
+            if key not in fields:
+                fields.append(key)
     with path.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+        writer = csv.DictWriter(f, fieldnames=fields)
         writer.writeheader()
         writer.writerows(rows)
 
@@ -225,4 +230,115 @@ def dedupe_slides(out_dir: Path, cfg: dict[str, Any]) -> dict[str, Any]:
         **semantic_manifest,
     }
     write_json(out_dir / "dedupe_manifest.json", manifest)
+    return manifest
+
+
+def apply_dedupe_agent_reviews(out_dir: Path, cfg: dict[str, Any]) -> dict[str, Any]:
+    provenance_dir = ensure_dir(out_dir / "dedupe")
+    rows_path = provenance_dir / "dedup_report.json"
+    candidates_path = provenance_dir / "semantic_candidates.json"
+    tasks_path = provenance_dir / "agent_review_tasks.json"
+    if not rows_path.exists():
+        raise SystemExit(f"Missing {rows_path}")
+    if not candidates_path.exists():
+        raise SystemExit(f"Missing {candidates_path}")
+    if not tasks_path.exists():
+        raise SystemExit(f"Missing {tasks_path}")
+
+    rows = read_json(rows_path)
+    candidates = read_json(candidates_path)
+    tasks = read_json(tasks_path)
+    threshold = float(cfg.get("dedupe", {}).get("agent_merge_confidence_threshold", 0.75))
+    row_by_time = {str(row["time"]): row for row in rows}
+    candidate_by_id = {str(item["candidate_id"]): item for item in candidates}
+    merged_count = 0
+    rejected_count = 0
+    low_confidence_count = 0
+    warnings: list[str] = []
+
+    for task in tasks:
+        candidate_id = str(task.get("candidate_id"))
+        candidate = candidate_by_id.get(candidate_id)
+        if candidate is None:
+            warnings.append(f"Missing candidate for task {task.get('task_id')}")
+            continue
+        output_paths = task.get("output_paths") or []
+        if not output_paths:
+            warnings.append(f"Task {task.get('task_id')} has no output_paths")
+            continue
+        output_path = Path(output_paths[0])
+        if not output_path.exists():
+            warnings.append(f"Missing review output for {task.get('task_id')}: {output_path}")
+            continue
+        review = read_json(output_path)
+        same_slide = bool(review.get("same_slide"))
+        confidence = float(review.get("confidence", 0.0))
+        candidate["agent_review_path"] = str(output_path.resolve())
+        candidate["agent_confidence"] = confidence
+        candidate["agent_reasoning"] = review.get("reasoning", "")
+        if not same_slide:
+            candidate["decision"] = "agent_rejected"
+            rejected_count += 1
+            continue
+        if confidence < threshold:
+            candidate["decision"] = "low_confidence_no_merge"
+            low_confidence_count += 1
+            warnings.append(f"Low confidence dedupe review for {candidate_id}: {confidence}")
+            continue
+
+        left_time = str(candidate["slide_a_time"])
+        right_time = str(candidate["slide_b_time"])
+        if parse_time_seconds(right_time) < parse_time_seconds(left_time):
+            left_time, right_time = right_time, left_time
+        left = row_by_time.get(left_time)
+        right = row_by_time.get(right_time)
+        if left is None or right is None:
+            warnings.append(f"Candidate {candidate_id} references a missing slide time")
+            continue
+
+        source_cluster = right["cluster_id"]
+        target_cluster = left["cluster_id"]
+        target_kept_time = left["kept_time"]
+        target_kept_path = left["kept_path"]
+        if source_cluster == target_cluster:
+            candidate["decision"] = "already_merged"
+            continue
+        for row in rows:
+            if row["cluster_id"] == source_cluster:
+                row["cluster_id"] = target_cluster
+                row["decision"] = "duplicate_agent"
+                row["kept_time"] = target_kept_time
+                row["kept_path"] = target_kept_path
+                row["agent_candidate_id"] = candidate_id
+                row["agent_confidence"] = confidence
+        candidate["decision"] = "merged_by_agent"
+        merged_count += 1
+
+    rows.sort(key=lambda row: parse_time_seconds(row["time"]))
+    intervals = build_intervals(rows, final_end_seconds(out_dir))
+    groups = build_groups(rows, intervals)
+    write_csv(provenance_dir / "dedup_report.csv", rows)
+    write_json(rows_path, rows)
+    write_intervals_csv(out_dir / "slide_intervals.csv", intervals)
+    write_json(out_dir / "slide_intervals.json", intervals)
+    write_json(out_dir / "dedup_groups.json", groups)
+    write_review_html(provenance_dir / "dedup_review.html", rows)
+    write_json(candidates_path, candidates)
+
+    previous_manifest = read_json(out_dir / "dedupe_manifest.json") if (out_dir / "dedupe_manifest.json").exists() else {}
+    unique_clusters = {str(row["cluster_id"]) for row in rows}
+    manifest = {
+        **previous_manifest,
+        "original_count": len(rows),
+        "kept_count": len(unique_clusters),
+        "duplicate_count": len(rows) - len(unique_clusters),
+        "agent_review_applied": True,
+        "agent_merge_confidence_threshold": threshold,
+        "merged_count": merged_count,
+        "rejected_count": rejected_count,
+        "low_confidence_count": low_confidence_count,
+        "warnings": warnings,
+    }
+    write_json(out_dir / "dedupe_manifest.json", manifest)
+    write_json(provenance_dir / "agent_review_apply_manifest.json", manifest)
     return manifest
