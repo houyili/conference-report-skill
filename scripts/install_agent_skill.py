@@ -26,6 +26,19 @@ def write_local_cli_path(target: Path, cli_path: Path | None) -> None:
     (local_dir / CLI_PATH_FILE).write_text(f"{local_path}\n", encoding="utf-8")
 
 
+def read_local_cli_path(target: Path) -> Path | None:
+    path = target / LOCAL_CONFIG_DIR / CLI_PATH_FILE
+    if not path.exists():
+        return None
+    value = path.read_text(encoding="utf-8").strip()
+    return Path(value).expanduser() if value else None
+
+
+def discover_cli_path() -> Path | None:
+    found = shutil.which("conference-report")
+    return Path(found) if found else None
+
+
 def candidate_skill_roots(home: Path, env: dict[str, str]) -> list[tuple[str, Path, str]]:
     candidates: list[tuple[str, Path, str]] = []
     seen: set[Path] = set()
@@ -143,13 +156,14 @@ def install_skill(
     for target_root in target_dirs:
         target_root = target_root.expanduser()
         target = target_root / skill_name
+        target_cli_path = cli_path or read_local_cli_path(target)
         if target.exists():
             if not upgrade:
                 raise FileExistsError(f"{target} already exists. Use the upgrade command to replace it.")
             shutil.rmtree(target)
         target_root.mkdir(parents=True, exist_ok=True)
         shutil.copytree(source, target)
-        write_local_cli_path(target, cli_path)
+        write_local_cli_path(target, target_cli_path)
         installed.append(target)
     return installed
 
@@ -186,13 +200,14 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit("Unexpected positional target. Use --target-dir PATH, or '-' for interactive selection.")
     source = args.source or default_source(args.skill_name)
     target_dirs = args.target_dir or prompt_for_target_dirs(args.command, args.skill_name)
+    cli_path = args.cli_path or discover_cli_path()
     try:
         installed = install_skill(
             source,
             target_dirs,
             args.skill_name,
             upgrade=args.command == "upgrade",
-            cli_path=args.cli_path,
+            cli_path=cli_path,
         )
     except OSError as exc:
         targets = ", ".join(str(path.expanduser() / args.skill_name) for path in target_dirs)
@@ -204,8 +219,14 @@ def main(argv: list[str] | None = None) -> int:
     verb = "Upgraded" if args.command == "upgrade" else "Installed"
     for path in installed:
         print(f"{verb} {args.skill_name} skill to {path}")
-        if args.cli_path is not None:
+        recorded_cli = read_local_cli_path(path)
+        if recorded_cli is not None:
             print(f"Recorded CLI path in {path / LOCAL_CONFIG_DIR / CLI_PATH_FILE}")
+        else:
+            print(
+                "Warning: no conference-report CLI path was recorded. "
+                "Install the Python package or rerun with --cli-path /absolute/path/to/conference-report."
+            )
     return 0
 
 

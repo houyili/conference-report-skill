@@ -56,6 +56,48 @@ class InstallAgentSkillTests(unittest.TestCase):
             )
             self.assertFalse((source / ".local").exists())
 
+    def test_upgrade_preserves_existing_cli_path_when_not_provided(self):
+        installer = load_script_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = self.make_skill_source(root)
+            target_root = root / "agent-skills"
+            cli = root / "env" / "bin" / "conference-report"
+            installer.install_skill(source, [target_root], "conference-report", upgrade=False, cli_path=cli)
+
+            installer.install_skill(source, [target_root], "conference-report", upgrade=True)
+
+            target = target_root / "conference-report"
+            self.assertEqual(
+                (target / ".local" / "cli-path.txt").read_text(encoding="utf-8"),
+                f"{cli.resolve(strict=False)}\n",
+            )
+
+    def test_main_auto_records_visible_cli_path_when_cli_path_omitted(self):
+        installer = load_script_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = self.make_skill_source(root)
+            target_root = root / "agent-skills"
+            cli = root / "visible" / "conference-report"
+            cli.parent.mkdir(parents=True)
+            cli.write_text("#!/bin/sh\n", encoding="utf-8")
+
+            with mock.patch.object(installer.shutil, "which", return_value=str(cli)):
+                installer.main([
+                    "install",
+                    "--source",
+                    str(source),
+                    "--target-dir",
+                    str(target_root),
+                ])
+
+            target = target_root / "conference-report"
+            self.assertEqual(
+                (target / ".local" / "cli-path.txt").read_text(encoding="utf-8"),
+                f"{cli.resolve(strict=False)}\n",
+            )
+
     def test_install_refuses_to_overwrite_existing_skill(self):
         installer = load_script_module()
         with tempfile.TemporaryDirectory() as tmp:
