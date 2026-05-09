@@ -97,6 +97,14 @@ class ConferenceReportSkillTextTests(unittest.TestCase):
         self.assertIn("worker_type: subagent", text)
         self.assertIn("validate --phase final", text)
 
+    def test_skill_documents_subagent_authorization_preflight(self):
+        text = SKILL_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("ask for subagent authorization before build/report gate", text)
+        self.assertIn("agent_report_dispatch_plan.json", text)
+        self.assertIn("report_write cannot be completed sequentially in parent context", text)
+        self.assertIn("slide cognition, QA detection, and grounding review may be completed sequentially", text)
+
 
 if __name__ == "__main__":
     unittest.main()

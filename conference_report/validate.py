@@ -230,7 +230,13 @@ def validate_task_contract(task: dict[str, Any], *, final: bool) -> dict[str, An
         for output in output_paths:
             output_path = Path(output)
             if not output_path.exists():
-                task_errors.append(f"Missing task output for {task_id}: {output}")
+                if stage == "report_write":
+                    task_errors.append(
+                        f"Missing task output for {task_id}: {output}. "
+                        "This usually means report-writing subagents have not run or have not been authorized."
+                    )
+                else:
+                    task_errors.append(f"Missing task output for {task_id}: {output}")
                 continue
             if stage == "report_write":
                 for section in task.get("required_sections", []):
@@ -275,7 +281,10 @@ def validate_report_execution_provenance(
     if provenance_norm not in effective_allowed_paths:
         errors.append(f"Task {task_id} execution provenance {provenance_norm} is not listed in allowed_write_paths")
     if not provenance_path.exists():
-        errors.append(f"Missing report execution provenance for {task_id}: {provenance_norm}")
+        errors.append(
+            f"Missing report execution provenance for {task_id}: {provenance_norm}. "
+            "This usually means report-writing subagents have not run, were not authorized, or did not write provenance."
+        )
         return errors
     try:
         provenance = read_json(provenance_path)
@@ -407,7 +416,10 @@ def validate_agent_tasks(out_dir: Path, *, phase: str, errors: list[str]) -> dic
         pending_reports: list[str] = []
         for report in reports_manifest.get("planned_reports", []):
             if not Path(report).exists():
-                errors.append(f"Missing planned report: {report}")
+                errors.append(
+                    f"Missing planned report: {report}. "
+                    "This usually means report-writing subagents have not run or have not been authorized."
+                )
                 pending_reports.append(report)
             else:
                 completed_reports.append(report)

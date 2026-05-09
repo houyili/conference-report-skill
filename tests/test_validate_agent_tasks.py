@@ -180,6 +180,7 @@ class AgentTaskValidationTests(unittest.TestCase):
             final_before = validate_run(out, phase="final")
             self.assertFalse(final_before["ok"])
             self.assertTrue(any("Missing task output" in error for error in final_before["errors"]))
+            self.assertTrue(any("report-writing subagents" in error for error in final_before["errors"]))
 
             write_required_agent_outputs(out)
             final_after = validate_run(out, phase="final")
@@ -222,6 +223,7 @@ class AgentTaskValidationTests(unittest.TestCase):
 
             self.assertFalse(result["ok"])
             self.assertTrue(any("Missing report execution provenance" in error for error in result["errors"]))
+            self.assertTrue(any("subagents" in error and "authorized" in error for error in result["errors"]))
 
     def test_final_validation_rejects_report_written_without_subagent(self):
         with tempfile.TemporaryDirectory() as tmp:

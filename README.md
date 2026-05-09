@@ -54,7 +54,11 @@ The report writer is intentionally conservative: it should combine visible PPT c
 
 ## Quality Gates And Audit
 
-`--writer agent` uses the host agent's LLM/VLM for cognition and writing, but the CLI still owns the gate checks. A report is not complete just because Markdown and JSON files exist. Final validation now includes a deterministic report-quality audit:
+`--writer agent` uses the host agent's LLM/VLM for cognition and writing, but the CLI still owns the gate checks. Final report writing is subagent-native: each reportable talk requires one clean report-writing subagent and a `report_writer_provenance.json` file with `worker_type: subagent`. If your host requires explicit permission to spawn subagents, ask before starting an end-to-end run or expect the pipeline to stop at `report_agent`.
+
+The run writes `agent_report_dispatch_plan.json` at the report gate. Parent agents should read that file, dispatch one worker per report task, wait for the Markdown report plus provenance JSON, then validate and resume. Without subagent authorization, use `--writer evidence` for evidence bundles or `--writer openai` for the pure CLI writer; do not mark parent-written reports as agent-written finals.
+
+A report is not complete just because Markdown and JSON files exist. Final validation now includes a deterministic report-quality audit:
 
 ```bash
 conference-report validate --out outputs/run --config outputs/run/config.yaml --phase report-quality
@@ -308,7 +312,7 @@ conference-report build URL \
 
 `--profile fast` skips optional audio preservation when platform subtitles are available, so smoke tests and normal agent-hosted runs avoid downloading large media files just for audit storage. If subtitles are missing, audio can still be downloaded for ASR fallback. Use `--profile full` or set `asr.save_audio: true` when you want preserved source audio and WAV artifacts.
 
-With `--writer agent`, the CLI uses the host agent's LLM/VLM instead of requiring an OpenAI key for report writing. With `--agent-gates dedupe,report`, the CLI stops at agent review gates, writes `pipeline_state.json`, and prints the exact next command. Complete only the listed task manifests, then validate and resume:
+With `--writer agent`, the CLI uses the host agent's LLM/VLM instead of requiring an OpenAI key for report writing. If your host requires explicit authorization for subagents, ask for it before promising a full final-report run. With `--agent-gates dedupe,report`, the CLI stops at agent review gates, writes `pipeline_state.json`, and prints the exact next command. At the report gate, it also writes `agent_report_dispatch_plan.json`; one dispatch-plan worker equals one report-writing subagent. Complete only the listed task manifests, then validate and resume:
 
 ```bash
 conference-report status --out "$RUN"
@@ -339,7 +343,7 @@ conference-report validate --out outputs/run --config outputs/run/config.yaml --
 
 Writer modes:
 
-- `--writer agent`: prepare deterministic task manifests; the host skill executes only those JSON tasks, writes only `allowed_write_paths`, and uses `validate --phase final` plus `resume` as the completion gate. This is the default skill path and does not require an OpenAI API key.
+- `--writer agent`: prepare deterministic task manifests; the host skill executes only those JSON tasks, writes only `allowed_write_paths`, and uses `validate --phase final` plus `resume` as the completion gate. Final `report_write` requires one isolated subagent per report and cannot be completed sequentially in the parent context. This is the default skill path and does not require an OpenAI API key.
 - `--writer openai`: pure CLI automated writing with the user's own OpenAI API key.
 - `--writer evidence`: write evidence bundles only.
 - `--writer auto`: pure CLI default; use OpenAI when a key exists, otherwise evidence bundles.

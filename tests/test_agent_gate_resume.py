@@ -295,6 +295,12 @@ class AgentGateResumeTests(unittest.TestCase):
             self.assertEqual(state["blocked_gate"], "report_agent")
             self.assertIn("config_path", state)
             self.assertIn("agent_report_tasks.json", state["task_manifests"])
+            self.assertIn("agent_report_dispatch_plan.json", state["task_manifests"])
+            self.assertTrue(state["requires_subagents"])
+            self.assertEqual(state["required_report_subagents"], 0)
+            self.assertEqual(state["subagent_required_stage"], "report_write")
+            self.assertIn("请用户明确授权为每个 report task 启动独立 subagent", state["authorization_message"])
+            self.assertIn("fallback_options", state)
             self.assertIn("--config", state["next_allowed_command"])
             self.assertIn("--phase final", state["next_allowed_command"])
 
@@ -311,6 +317,93 @@ class AgentGateResumeTests(unittest.TestCase):
             self.assertIn("waiting_for_agent", text)
             self.assertIn("dedupe_review", text)
             self.assertIn("Next:", text)
+
+    def test_status_outputs_report_subagent_authorization_guidance(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            provenance = out / "talks" / "talk-one" / "agent_execution" / "report_writer_provenance.json"
+            write_json(
+                out / "pipeline_state.json",
+                {
+                    "source": "URL",
+                    "completed_stages": ["ingest", "asr", "slides", "dedupe", "segment", "report", "validate"],
+                    "current_status": "waiting_for_agent",
+                    "blocked_gate": "report_agent",
+                    "requires_subagents": True,
+                    "required_report_subagents": 1,
+                    "subagent_required_stage": "report_write",
+                    "authorization_message": "请用户明确授权为每个 report task 启动独立 subagent。",
+                    "pending_report_subagents": [
+                        {
+                            "slug": "talk-one",
+                            "task_id": "report:talk-one",
+                            "execution_provenance_path": str(provenance),
+                        }
+                    ],
+                    "fallback_options": [
+                        {"writer": "evidence", "description": "evidence bundle only"},
+                        {"writer": "openai", "description": "pure CLI writer"},
+                    ],
+                    "next_allowed_command": f"conference-report validate --out {out} --phase final",
+                    "resume_command": f"conference-report resume --out {out}",
+                    "task_manifests": ["agent_report_dispatch_plan.json", "agent_report_tasks.json"],
+                    "human_message": "当前停在 agent report writing。",
+                },
+            )
+            stdout = io.StringIO()
+            with mock.patch("sys.stdout", stdout):
+                result = cli.main(["status", "--out", str(out)])
+
+            self.assertEqual(result, 0)
+            text = stdout.getvalue()
+            self.assertIn("Requires subagents: true", text)
+            self.assertIn("Required report subagents: 1", text)
+            self.assertIn("Subagent stage: report_write", text)
+            self.assertIn("Authorization:", text)
+            self.assertIn("Pending report subagents:", text)
+            self.assertIn("talk-one", text)
+            self.assertIn("report_writer_provenance.json", text)
+            self.assertIn("Fallback options:", text)
+
+    def test_status_enriches_legacy_report_gate_state_with_subagent_guidance(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            provenance = out / "talks" / "talk-one" / "agent_execution" / "report_writer_provenance.json"
+            write_json(
+                out / "pipeline_state.json",
+                {
+                    "source": "URL",
+                    "completed_stages": ["ingest", "asr", "slides", "dedupe", "segment", "report", "validate"],
+                    "current_status": "waiting_for_agent",
+                    "blocked_gate": "report_agent",
+                    "next_allowed_command": f"conference-report validate --out {out} --phase final",
+                    "resume_command": f"conference-report resume --out {out}",
+                    "task_manifests": ["agent_slide_cognition_tasks.json", "agent_qa_tasks.json", "agent_report_tasks.json", "agent_grounding_tasks.json"],
+                    "human_message": "当前停在 agent report writing。",
+                },
+            )
+            write_json(
+                out / "agent_report_tasks.json",
+                [
+                    {
+                        "task_id": "report:talk-one",
+                        "stage": "report_write",
+                        "slug": "talk-one",
+                        "report_path": str(out / "reports" / "talk-one.md"),
+                        "execution_provenance_path": str(provenance),
+                    }
+                ],
+            )
+            stdout = io.StringIO()
+            with mock.patch("sys.stdout", stdout):
+                result = cli.main(["status", "--out", str(out)])
+
+            self.assertEqual(result, 0)
+            text = stdout.getvalue()
+            self.assertIn("Requires subagents: true", text)
+            self.assertIn("Required report subagents: 1", text)
+            self.assertIn("agent_report_dispatch_plan.json", text)
+            self.assertIn("talk-one", text)
 
 
 if __name__ == "__main__":

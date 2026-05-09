@@ -14,6 +14,18 @@ from .utils import ensure_dir, find_tool, parse_time_seconds, read_json, write_j
 
 WRITER_MODES = {"auto", "agent", "openai", "evidence"}
 REPORT_REQUIRED_SECTIONS = ["摘要", "核心 Findings / Experiments / Insights", "逐页 PPT 解读", "QA"]
+REPORT_DISPATCH_PLAN_FILE = "agent_report_dispatch_plan.json"
+REPORT_SUBAGENT_AUTHORIZATION_MESSAGE = "请用户明确授权为每个 report task 启动独立 subagent。"
+REPORT_SUBAGENT_FALLBACK_OPTIONS = [
+    {
+        "writer": "evidence",
+        "description": "Write evidence bundles only; this does not create agent-written final reports.",
+    },
+    {
+        "writer": "openai",
+        "description": "Use the pure CLI OpenAI writer with the user's API key or credential store.",
+    },
+]
 
 BOILERPLATE_TOKENS = {
     "iclr",
@@ -585,6 +597,47 @@ def agent_report_task(
     }
 
 
+def agent_report_dispatch_plan(out_dir: Path, report_tasks: list[dict[str, Any]]) -> dict[str, Any]:
+    workers: list[dict[str, Any]] = []
+    for index, task in enumerate(report_tasks, start=1):
+        workers.append(
+            {
+                "worker_id": f"report-writer:{task.get('slug', index)}",
+                "worker_type": "subagent",
+                "isolation_scope": "single_report",
+                "stage": "report_write",
+                "task_id": task.get("task_id"),
+                "slug": task.get("slug"),
+                "title": task.get("title"),
+                "task_manifest": str((out_dir / "agent_report_tasks.json").resolve()),
+                "task_index": index - 1,
+                "task": task,
+                "input_paths": task.get("input_paths", []),
+                "dependency_output_paths": task.get("dependency_output_paths", []),
+                "output_paths": task.get("output_paths", []),
+                "allowed_write_paths": task.get("allowed_write_paths", []),
+                "execution_provenance_path": task.get("execution_provenance_path"),
+                "done_condition": task.get("done_condition"),
+            }
+        )
+    return {
+        "stage": "report_write",
+        "requires_subagents": True,
+        "required_report_subagents": len(report_tasks),
+        "subagent_required_stage": "report_write",
+        "authorization_message": REPORT_SUBAGENT_AUTHORIZATION_MESSAGE,
+        "fallback_options": REPORT_SUBAGENT_FALLBACK_OPTIONS,
+        "parent_agent_responsibilities": [
+            "Ask for explicit user authorization before dispatching report-writing subagents when the host requires it.",
+            "Dispatch exactly one clean subagent context per worker item.",
+            "Give each worker only its task object and the listed input/dependency paths.",
+            "Wait for report Markdown and report_writer_provenance.json outputs.",
+            "Run validate --phase final, then resume only after validation passes.",
+        ],
+        "workers": workers,
+    }
+
+
 def resolve_writer_mode(cfg: dict[str, Any], writer: str | None, dry_run: bool | None) -> str:
     if dry_run is True:
         return "evidence"
@@ -708,10 +761,14 @@ def generate_reports(out_dir: Path, cfg: dict[str, Any], *, dry_run: bool | None
     if writer_mode == "agent":
         for stage, path in task_manifest_paths.items():
             write_json(path, agent_tasks.get(stage, []))
+        write_json(out_dir / REPORT_DISPATCH_PLAN_FILE, agent_report_dispatch_plan(out_dir, agent_tasks["report_write"]))
     else:
         for path in task_manifest_paths.values():
             if path.exists():
                 path.unlink()
+        dispatch_plan_path = out_dir / REPORT_DISPATCH_PLAN_FILE
+        if dispatch_plan_path.exists():
+            dispatch_plan_path.unlink()
 
     planned_reports = [str(path.resolve()) for path in report_paths]
     completed_reports = [path for path in planned_reports if Path(path).exists()]
@@ -730,6 +787,7 @@ def generate_reports(out_dir: Path, cfg: dict[str, Any], *, dry_run: bool | None
     }
     if writer_mode == "agent":
         manifest["task_manifests"] = {stage: str(path.resolve()) for stage, path in task_manifest_paths.items()}
+        manifest["task_manifests"]["report_dispatch"] = str((out_dir / REPORT_DISPATCH_PLAN_FILE).resolve())
         manifest["tasks_manifest"] = str(task_manifest_paths["report_write"].resolve())
         manifest["task_count"] = sum(len(tasks) for tasks in agent_tasks.values())
         manifest["task_counts"] = {stage: len(tasks) for stage, tasks in agent_tasks.items()}

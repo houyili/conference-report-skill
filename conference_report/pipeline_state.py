@@ -27,6 +27,7 @@ GATE_MESSAGES = {
         "label": "agent report writing",
         "validate_phase": "final",
         "task_manifests": [
+            "agent_report_dispatch_plan.json",
             "agent_slide_cognition_tasks.json",
             "agent_qa_tasks.json",
             "agent_report_tasks.json",
@@ -34,6 +35,7 @@ GATE_MESSAGES = {
         ],
         "instructions": [
             "按 slide_cognition、qa_detection、report_write、grounding_review 顺序执行 task manifests。",
+            "report_write 必须为每个 report task 启动独立 subagent；父 agent 不要在自己的上下文里代写最终报告。",
             "每个任务只写 allowed_write_paths 中列出的文件。",
             "完成后运行 validate --phase final。",
             "验证通过后运行 resume。",
@@ -165,6 +167,31 @@ def format_state_for_human(state: dict[str, Any] | None) -> str:
     if task_manifests:
         lines.append("Task manifests:")
         lines.extend(f"- {item}" for item in task_manifests)
+    if state.get("requires_subagents"):
+        lines.append("Requires subagents: true")
+        if state.get("required_report_subagents") is not None:
+            lines.append(f"Required report subagents: {state['required_report_subagents']}")
+        if state.get("subagent_required_stage"):
+            lines.append(f"Subagent stage: {state['subagent_required_stage']}")
+        if state.get("authorization_message"):
+            lines.append(f"Authorization: {state['authorization_message']}")
+        pending = state.get("pending_report_subagents") or []
+        if pending:
+            lines.append("Pending report subagents:")
+            for item in pending[:3]:
+                if not isinstance(item, dict):
+                    continue
+                slug = item.get("slug") or item.get("task_id")
+                provenance = item.get("execution_provenance_path") or ""
+                lines.append(f"- {slug}: {provenance}")
+        fallback_options = state.get("fallback_options") or []
+        if fallback_options:
+            lines.append("Fallback options:")
+            for item in fallback_options:
+                if isinstance(item, dict):
+                    lines.append(f"- --writer {item.get('writer')}: {item.get('description')}")
+                else:
+                    lines.append(f"- {item}")
     if state.get("human_message"):
         lines.append(str(state["human_message"]))
     if state.get("next_allowed_command"):

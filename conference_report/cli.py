@@ -16,7 +16,12 @@ from .pipeline_state import (
     write_completed_state,
     write_waiting_state,
 )
-from .report import generate_reports
+from .report import (
+    REPORT_DISPATCH_PLAN_FILE,
+    REPORT_SUBAGENT_AUTHORIZATION_MESSAGE,
+    REPORT_SUBAGENT_FALLBACK_OPTIONS,
+    generate_reports,
+)
 from .segment import segment
 from .slides import extract_slides
 from .utils import read_json, write_json
@@ -120,6 +125,7 @@ def report_task_manifests(out: Path) -> list[str]:
     reports_manifest_path = out / "reports_manifest.json"
     if not reports_manifest_path.exists():
         return [
+            REPORT_DISPATCH_PLAN_FILE,
             "agent_slide_cognition_tasks.json",
             "agent_qa_tasks.json",
             "agent_report_tasks.json",
@@ -128,13 +134,76 @@ def report_task_manifests(out: Path) -> list[str]:
     reports_manifest = read_json(reports_manifest_path)
     task_manifests = reports_manifest.get("task_manifests") or {}
     if isinstance(task_manifests, dict):
-        return [display_path(str(path)) for path in task_manifests.values()]
+        manifests = [display_path(str(path)) for path in task_manifests.values()]
+        if REPORT_DISPATCH_PLAN_FILE not in manifests:
+            manifests.insert(0, REPORT_DISPATCH_PLAN_FILE)
+        return manifests
     return [
+        REPORT_DISPATCH_PLAN_FILE,
         "agent_slide_cognition_tasks.json",
         "agent_qa_tasks.json",
         "agent_report_tasks.json",
         "agent_grounding_tasks.json",
     ]
+
+
+def report_subagent_dispatch_metadata(out: Path) -> dict[str, object]:
+    dispatch_path = out / REPORT_DISPATCH_PLAN_FILE
+    if dispatch_path.exists():
+        try:
+            dispatch = read_json(dispatch_path)
+        except Exception:
+            dispatch = {}
+    else:
+        dispatch = {}
+    report_tasks_path = out / "agent_report_tasks.json"
+    try:
+        report_tasks = read_json(report_tasks_path) if report_tasks_path.exists() else []
+    except Exception:
+        report_tasks = []
+    if not isinstance(report_tasks, list):
+        report_tasks = []
+    workers = dispatch.get("workers") if isinstance(dispatch, dict) else []
+    if not isinstance(workers, list) or not workers:
+        workers = [
+            {
+                "task_id": task.get("task_id"),
+                "slug": task.get("slug"),
+                "report_path": task.get("report_path"),
+                "execution_provenance_path": task.get("execution_provenance_path"),
+            }
+            for task in report_tasks
+            if isinstance(task, dict)
+        ]
+    pending = []
+    for worker in workers:
+        if not isinstance(worker, dict):
+            continue
+        task = worker.get("task") if isinstance(worker.get("task"), dict) else {}
+        pending.append(
+            {
+                "task_id": worker.get("task_id") or task.get("task_id"),
+                "slug": worker.get("slug") or task.get("slug"),
+                "report_path": worker.get("report_path") or task.get("report_path"),
+                "execution_provenance_path": worker.get("execution_provenance_path") or task.get("execution_provenance_path"),
+            }
+        )
+    required_count = dispatch.get("required_report_subagents") if isinstance(dispatch, dict) else None
+    if required_count is None:
+        required_count = len(report_tasks)
+    return {
+        "requires_subagents": True,
+        "required_report_subagents": required_count,
+        "subagent_required_stage": "report_write",
+        "authorization_message": str(dispatch.get("authorization_message") or REPORT_SUBAGENT_AUTHORIZATION_MESSAGE)
+        if isinstance(dispatch, dict)
+        else REPORT_SUBAGENT_AUTHORIZATION_MESSAGE,
+        "fallback_options": dispatch.get("fallback_options", REPORT_SUBAGENT_FALLBACK_OPTIONS)
+        if isinstance(dispatch, dict)
+        else REPORT_SUBAGENT_FALLBACK_OPTIONS,
+        "dispatch_plan": REPORT_DISPATCH_PLAN_FILE,
+        "pending_report_subagents": pending,
+    }
 
 
 def pause_for_report_agent(out: Path, args: argparse.Namespace, completed_stages: list[str], writer: str) -> None:
@@ -150,10 +219,33 @@ def pause_for_report_agent(out: Path, args: argparse.Namespace, completed_stages
     )
     state = read_pipeline_state(out) or {}
     state["task_manifests"] = report_task_manifests(out)
+    state.update(report_subagent_dispatch_metadata(out))
+    state["human_message"] = "\n".join(
+        [
+            str(state.get("human_message") or ""),
+            "report_write 需要用户明确授权为每个 report task 启动独立 subagent。",
+            "父 agent 可以顺序完成 slide_cognition、qa_detection 和 grounding_review，但不能在父上下文里代写最终报告。",
+            "如果不授权 subagents，本 run 可以停在 evidence/gate；请改用 --writer evidence 或 --writer openai，不要伪装成 agent-written final report。",
+        ]
+    ).strip()
     config_arg = f" --config {state['config_path']}" if state.get("config_path") else ""
     state["next_allowed_command"] = f"conference-report validate --out {out}{config_arg} --phase final"
     write_json(out / "pipeline_state.json", state)
     print(format_state_for_human(state))
+
+
+def status_state(out: Path) -> dict[str, object] | None:
+    state = read_pipeline_state(out)
+    if not state:
+        return None
+    if state.get("blocked_gate") != "report_agent":
+        return state
+    enriched = dict(state)
+    enriched["task_manifests"] = report_task_manifests(out)
+    for key, value in report_subagent_dispatch_metadata(out).items():
+        if not enriched.get(key):
+            enriched[key] = value
+    return enriched
 
 
 def revision_task_manifests(out: Path) -> list[str]:
@@ -455,7 +547,7 @@ def main(argv: list[str] | None = None) -> int:
     out = args.out.resolve()
 
     if args.cmd == "status":
-        print(format_state_for_human(read_pipeline_state(out)))
+        print(format_state_for_human(status_state(out)))
         return 0
 
     if args.cmd == "build":

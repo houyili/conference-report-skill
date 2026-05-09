@@ -28,7 +28,7 @@ fi
 
 If no CLI path can be resolved, or the resolved command fails `--help`, stop and tell the user the installed CLI is not visible to this agent shell. Ask them to set `CONFERENCE_REPORT_CLI`, restart the agent session, expose the Python environment's script directory on the agent runtime `PATH`, or upgrade the global skill with the installer so `.local/cli-path.txt` is written. Do not silently fall back to `python -m conference_report.cli` or a repository `.venv` during normal use.
 
-Then create a run-local config and start the pipeline:
+Then create a run-local config and start the pipeline. For `--writer agent`, ask for subagent authorization before build/report gate when the host framework requires explicit permission to spawn workers. Explain that final `report_write` needs one clean report-writing subagent per report: one subagent per report, not one parent-context writer for all reports. Without that authorization the run can still produce evidence and stop at `report_agent`, but it cannot complete agent-written final reports.
 
 ```bash
 RUN="outputs/<run-name>"
@@ -98,10 +98,11 @@ Then read the task manifests from the run directory:
 
 - `agent_slide_cognition_tasks.json`
 - `agent_qa_tasks.json`
+- `agent_report_dispatch_plan.json`
 - `agent_report_tasks.json`
 - `agent_grounding_tasks.json`
 
-The agent host does not decide the workflow. Execute tasks in this order: `slide_cognition`, `qa_detection`, `report_write`, then `grounding_review`, then `report-quality` validation, then revision if needed. If the host supports subagents, create one clean subagent context per report-writing task so each final report is written in isolation from other talks and from parent-agent orchestration. Other stage tasks may be parallelized by task when the host supports it. If the host has no subagent support, execute the tasks sequentially in the same stage order. Do not skip a stage and do not edit any task manifest.
+The agent host does not decide the workflow. Execute tasks in this order: `slide_cognition`, `qa_detection`, `report_write`, then `grounding_review`, then `report-quality` validation, then revision if needed. Read `agent_report_dispatch_plan.json` before `report_write`: it maps each report task to exactly one clean report-writing subagent. If the host supports subagents but requires explicit user approval, ask before dispatching them. At this gate, slide cognition, QA detection, and grounding review may be completed sequentially in the parent context when needed, but report_write cannot be completed sequentially in parent context. Final report writing must produce `worker_type: subagent` provenance, so a parent-written report will fail `validate --phase final`. If the host has no subagent capability or the user does not authorize it, stop at the gate or switch to `--writer evidence` / `--writer openai`; do not pretend the output is an agent-written final report. Do not skip a stage and do not edit any task manifest.
 
 Every task is self-contained. Give the worker only the JSON task object and its listed files:
 
@@ -117,7 +118,9 @@ Workers must not edit shared manifests, source files, credentials, cookies, unre
 
 Agent 的目标是 report quality，不是填完文件。不要把 OCR/ASR 机械填进报告，也不要用脚本批量生成浅层 JSON 来伪装已经理解了 talk。
 
-For final report writing, one `agent_report_tasks.json` item equals one dedicated report-writing subagent when the host supports subagents: one subagent per report, not one shared writer across talks. That worker must build topic-level understanding before writing: read the metadata, full ASR transcript or timeline, preserved slide screenshots, OCR evidence, slide cognition outputs, QA outputs, and any synthesis manifests for that assigned topic. The worker should understand the research problem, method, experiments, results, limitations, and speaker intent first, then write the opening overview and per-slide explanations. OCR, ASR, and screenshots are evidence for understanding, not report prose; keep slide screenshots available, but do not turn noisy OCR tokens into concepts or force low-information slides into generic explanations.
+For final report writing, one `agent_report_tasks.json` item equals one dedicated report-writing subagent when the host supports subagents: one clean subagent context per report, not one shared writer across talks. That worker must build topic-level understanding before writing: read the metadata, full ASR transcript or timeline, preserved slide screenshots, OCR evidence, slide cognition outputs, QA outputs, and any synthesis manifests for that assigned topic. The worker should understand the research problem, method, experiments, results, limitations, and speaker intent first, then write the opening overview and per-slide explanations. OCR, ASR, and screenshots are evidence for understanding, not report prose; keep slide screenshots available, but do not turn noisy OCR tokens into concepts or force low-information slides into generic explanations.
+
+The parent agent's report dispatch job is narrow: read `agent_report_dispatch_plan.json`, create one worker per listed report task, pass only that task object plus its `input_paths` and `dependency_output_paths`, wait for the Markdown report and provenance JSON, then run validation and resume. The parent agent may coordinate workers, but it must not write the final report itself.
 
 Report-writing tasks must also write `report_writer_provenance.json` to the task's `execution_provenance_path`. This is a hard final gate, not optional metadata. The JSON must include `worker_type: subagent`, `isolation_scope: single_report`, `host_agent_framework`, `worker_id`, `assigned_task_id`, `assigned_slug`, `topic_understanding_confirmed: true`, `input_paths_read`, `output_paths_written`, and `allowed_write_paths`. If `validate --phase final` cannot verify this provenance, the run is not complete.
 
@@ -189,6 +192,7 @@ Each run directory should contain:
 - `talks/<talk_slug>/report_writer_prompt.md`: writer instructions
 - `agent_slide_cognition_tasks.json`: one bounded cognition task per evidence slide when `--writer agent` is used
 - `agent_qa_tasks.json`: one bounded QA detection task per reportable talk/topic
+- `agent_report_dispatch_plan.json`: one worker item per final report-writing subagent, plus authorization and fallback guidance
 - `agent_report_tasks.json`: one bounded report-writing task per reportable talk/topic
 - `agent_grounding_tasks.json`: one bounded grounding review task per final report
 - `agent_task_validation.json`: machine-readable status for task contract or final-output validation

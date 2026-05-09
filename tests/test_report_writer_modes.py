@@ -97,9 +97,24 @@ class ReportWriterModeTests(unittest.TestCase):
             self.assertEqual(manifest["completed_reports"], [])
             self.assertEqual(sorted(manifest["pending_reports"]), sorted(item["report_path"] for item in tasks))
             self.assertEqual(manifest["task_manifests"]["report_write"], str((out / "agent_report_tasks.json").resolve()))
+            self.assertEqual(manifest["task_manifests"]["report_dispatch"], str((out / "agent_report_dispatch_plan.json").resolve()))
             self.assertIn("slide_cognition", manifest["task_manifests"])
             self.assertIn("qa_detection", manifest["task_manifests"])
             self.assertIn("grounding_review", manifest["task_manifests"])
+
+            dispatch = read_json(out / "agent_report_dispatch_plan.json")
+            self.assertTrue(dispatch["requires_subagents"])
+            self.assertEqual(dispatch["required_report_subagents"], 2)
+            self.assertEqual(dispatch["subagent_required_stage"], "report_write")
+            self.assertIn("请用户明确授权为每个 report task 启动独立 subagent", dispatch["authorization_message"])
+            self.assertEqual(len(dispatch["workers"]), 2)
+            self.assertEqual({worker["slug"] for worker in dispatch["workers"]}, {"talk_one", "talk_two"})
+            self.assertTrue(all(worker["worker_type"] == "subagent" for worker in dispatch["workers"]))
+            self.assertTrue(all(worker["isolation_scope"] == "single_report" for worker in dispatch["workers"]))
+            self.assertTrue(all(worker["task"]["task_id"].startswith("report:") for worker in dispatch["workers"]))
+            self.assertTrue(all(worker["execution_provenance_path"] in worker["allowed_write_paths"] for worker in dispatch["workers"]))
+            self.assertIn("evidence", {item["writer"] for item in dispatch["fallback_options"]})
+            self.assertIn("openai", {item["writer"] for item in dispatch["fallback_options"]})
 
     def test_openai_writer_requires_key_before_calling_openai(self):
         with tempfile.TemporaryDirectory() as tmp:
