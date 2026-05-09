@@ -411,6 +411,25 @@ class ReportQualityGateTests(unittest.TestCase):
             self.assertEqual(grounding_revision_tasks[0]["stage"], "grounding_revision")
             self.assertEqual(grounding_revision_tasks[0]["output_paths"], [str(paths["grounding"].resolve())])
 
+    def test_report_revision_task_infers_provenance_path_for_legacy_manifest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            paths = make_agent_quality_run(out)
+            write_bad_quality_outputs(paths)
+            report_tasks = read_json(out / "agent_report_tasks.json")
+            del report_tasks[0]["execution_provenance_path"]
+            del report_tasks[0]["required_provenance"]
+            del report_tasks[0]["requires_subagent"]
+            report_tasks[0]["allowed_write_paths"] = [str(paths["report"].resolve())]
+            write_json(out / "agent_report_tasks.json", report_tasks)
+
+            result = validate_run(out, phase="report-quality")
+
+            self.assertFalse(result["ok"])
+            report_revision_tasks = read_json(out / "agent_report_revision_tasks.json")
+            self.assertEqual(report_revision_tasks[0]["execution_provenance_path"], str(paths["provenance"].resolve()))
+            self.assertIn(str(paths["provenance"].resolve()), report_revision_tasks[0]["allowed_write_paths"])
+
     def test_final_validation_requires_v2_cognition_schema(self):
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp)

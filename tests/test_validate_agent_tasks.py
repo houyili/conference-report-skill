@@ -142,9 +142,12 @@ def write_required_agent_outputs(
         if write_provenance:
             provenance_path = Path(
                 task.get("execution_provenance_path")
-                or Path(task["report_path"]).with_suffix(".provenance.json")
+                or Path(task.get("talk_dir", "")).joinpath("agent_execution", "report_writer_provenance.json")
             )
             provenance_path.parent.mkdir(parents=True, exist_ok=True)
+            provenance_allowed_paths = list(task.get("allowed_write_paths", task["output_paths"]))
+            if str(provenance_path.resolve()) not in provenance_allowed_paths:
+                provenance_allowed_paths.append(str(provenance_path.resolve()))
             write_json(
                 provenance_path,
                 {
@@ -157,7 +160,7 @@ def write_required_agent_outputs(
                     "topic_understanding_confirmed": True,
                     "input_paths_read": task["input_paths"] + task.get("dependency_output_paths", []),
                     "output_paths_written": task["output_paths"] + [str(provenance_path.resolve())],
-                    "allowed_write_paths": task.get("allowed_write_paths", task["output_paths"]),
+                    "allowed_write_paths": provenance_allowed_paths,
                 },
             )
 
@@ -233,6 +236,27 @@ class AgentTaskValidationTests(unittest.TestCase):
 
             self.assertFalse(result["ok"])
             self.assertTrue(any("worker_type must be subagent" in error for error in result["errors"]))
+
+    def test_legacy_report_task_without_provenance_path_can_be_repaired_with_inferred_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            make_evidence_scaffold(out)
+            make_talk(out, "talk_one", "Talk One")
+            with mock.patch("conference_report.report.ocr_slide_text", return_value="Method slide"):
+                generate_reports(out, make_cfg(), writer="agent")
+            tasks = read_json(out / "agent_report_tasks.json")
+            legacy_provenance = Path(tasks[0]["execution_provenance_path"])
+            del tasks[0]["execution_provenance_path"]
+            del tasks[0]["required_provenance"]
+            del tasks[0]["requires_subagent"]
+            tasks[0]["allowed_write_paths"] = [tasks[0]["report_path"]]
+            write_json(out / "agent_report_tasks.json", tasks)
+
+            write_required_agent_outputs(out)
+            result = validate_run(out, phase="final")
+
+            self.assertTrue(legacy_provenance.exists())
+            self.assertTrue(result["ok"], result)
 
     def test_agent_task_validation_rejects_outputs_outside_allowed_write_paths(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -264,15 +264,15 @@ def validate_report_execution_provenance(
     task_id = str(task.get("task_id", "<missing>"))
     slug = str(task.get("slug", ""))
     errors: list[str] = []
-    provenance_path_value = task.get("execution_provenance_path")
-    required_provenance = task.get("required_provenance")
-    if not provenance_path_value and isinstance(required_provenance, dict):
-        provenance_path_value = required_provenance.get("path")
-    if not provenance_path_value:
+    provenance_path = report_execution_provenance_path(task)
+    if provenance_path is None:
         return [f"Task {task_id} missing execution_provenance_path"]
-    provenance_path = Path(normalize_path(str(provenance_path_value)))
-    provenance_norm = str(provenance_path)
-    if provenance_norm not in allowed_paths:
+    provenance_norm = normalize_path(provenance_path)
+    effective_allowed_paths = set(allowed_paths)
+    explicit_provenance_path = bool(task.get("execution_provenance_path")) or isinstance(task.get("required_provenance"), dict)
+    if not explicit_provenance_path:
+        effective_allowed_paths.add(provenance_norm)
+    if provenance_norm not in effective_allowed_paths:
         errors.append(f"Task {task_id} execution provenance {provenance_norm} is not listed in allowed_write_paths")
     if not provenance_path.exists():
         errors.append(f"Missing report execution provenance for {task_id}: {provenance_norm}")
@@ -335,14 +335,31 @@ def validate_report_execution_provenance(
     missing_writes = sorted(path for path in expected_writes if path not in written_norm)
     if missing_writes:
         errors.append(f"Report execution provenance missing output_paths_written for {task_id}: {missing_writes[:3]}")
-    outside_writes = sorted(path for path in written_norm if path not in allowed_paths)
+    outside_writes = sorted(path for path in written_norm if path not in effective_allowed_paths)
     if outside_writes:
         errors.append(f"Report execution provenance lists writes outside allowed_write_paths for {task_id}: {outside_writes[:3]}")
     provenance_allowed_norm = {normalize_path(path) for path in provenance_allowed_paths if isinstance(path, str)}
-    missing_allowed = sorted(path for path in allowed_paths if path not in provenance_allowed_norm)
+    missing_allowed = sorted(path for path in effective_allowed_paths if path not in provenance_allowed_norm)
     if missing_allowed:
         errors.append(f"Report execution provenance missing allowed_write_paths for {task_id}: {missing_allowed[:3]}")
     return errors
+
+
+def report_execution_provenance_path(task: dict[str, Any]) -> Path | None:
+    provenance_path_value = task.get("execution_provenance_path")
+    required_provenance = task.get("required_provenance")
+    if not provenance_path_value and isinstance(required_provenance, dict):
+        provenance_path_value = required_provenance.get("path")
+    if provenance_path_value:
+        return Path(normalize_path(str(provenance_path_value)))
+    talk_dir = task.get("talk_dir")
+    if isinstance(talk_dir, str) and talk_dir:
+        return Path(normalize_path(talk_dir)) / "agent_execution" / "report_writer_provenance.json"
+    report_path = task.get("report_path") or ((task.get("output_paths") or [None])[0])
+    if isinstance(report_path, str) and report_path:
+        report = Path(normalize_path(report_path))
+        return report.parent / f"{report.stem}.provenance.json"
+    return None
 
 
 def validate_dedupe_review_tasks(out_dir: Path, errors: list[str]) -> dict[str, Any]:
@@ -758,9 +775,10 @@ def write_quality_repair_tasks(out_dir: Path, report_results: list[dict[str, Any
                 }
             )
         if "report_revision_required" in issue_types and report_outputs:
-            provenance_path = report_task.get("execution_provenance_path")
+            provenance = report_execution_provenance_path(report_task)
+            provenance_path = str(provenance) if provenance is not None else None
             report_allowed_writes = list(report_outputs)
-            if isinstance(provenance_path, str) and provenance_path not in report_allowed_writes:
+            if provenance_path and provenance_path not in report_allowed_writes:
                 report_allowed_writes.append(provenance_path)
             report_revision_tasks.append(
                 {
