@@ -74,6 +74,13 @@ class ReportWriterModeTests(unittest.TestCase):
             self.assertTrue(all("摘要" in item["required_sections"] for item in tasks))
             self.assertTrue(all("QA" in item["required_sections"] for item in tasks))
             self.assertTrue(all("validation_rules" in item for item in tasks))
+            self.assertTrue(all("subagent_contract" in item for item in tasks))
+            self.assertTrue(all("quality_contract" in item for item in tasks))
+            for task in tasks:
+                contract_text = "\n".join(task["subagent_contract"] + task["quality_contract"])
+                self.assertIn("one clean subagent context per report", contract_text)
+                self.assertIn("topic-level understanding before writing", contract_text)
+                self.assertIn("OCR, ASR, and screenshots are evidence for understanding", contract_text)
             self.assertEqual([str(path.resolve()) for path in report_paths], [item["report_path"] for item in tasks])
 
             manifest = read_json(out / "reports_manifest.json")

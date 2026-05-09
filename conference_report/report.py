@@ -545,10 +545,19 @@ def agent_report_task(
             {"type": "allowed_writes"},
         ],
         "quality_contract": [
+            "One report task must be handled by one clean report-writing subagent context when the host supports subagents.",
+            "Build topic-level understanding before writing: read metadata, timeline/ASR, all preserved slide screenshots, OCR evidence, slide cognition, QA, and any synthesis manifests for this assigned topic.",
+            "OCR, ASR, and screenshots are evidence for understanding, not report prose; do not turn noisy OCR tokens into concepts.",
             "Read every dependency_output_paths item before writing.",
             "Use slide_cognition main_claims, numbers_and_entities, speaker_intent, and qa_pairs where available.",
             "Do not use a repeated page template or copy OCR/ASR paragraphs as the report body.",
             "Each major finding must include or imply a concrete slide/time/evidence anchor.",
+        ],
+        "subagent_contract": [
+            "one clean subagent context per report",
+            "topic-level understanding before writing",
+            "OCR, ASR, and screenshots are evidence for understanding",
+            "the subagent writes only output_paths and allowed_write_paths; the parent agent and CLI validate and resume",
         ],
         "done_condition": "Write exactly one quality-gated Markdown report to output_paths[0] after dependency_output_paths exist; it must pass validate --phase report-quality.",
     }

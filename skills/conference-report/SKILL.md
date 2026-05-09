@@ -101,7 +101,7 @@ Then read the task manifests from the run directory:
 - `agent_report_tasks.json`
 - `agent_grounding_tasks.json`
 
-The agent host does not decide the workflow. Execute tasks in this order: `slide_cognition`, `qa_detection`, `report_write`, then `grounding_review`, then `report-quality` validation, then revision if needed. If the host supports subagents, create one subagent per task within the current stage. If the host has no subagent support, execute the tasks sequentially in the same stage order. Do not skip a stage and do not edit any task manifest.
+The agent host does not decide the workflow. Execute tasks in this order: `slide_cognition`, `qa_detection`, `report_write`, then `grounding_review`, then `report-quality` validation, then revision if needed. If the host supports subagents, create one clean subagent context per report-writing task so each final report is written in isolation from other talks and from parent-agent orchestration. Other stage tasks may be parallelized by task when the host supports it. If the host has no subagent support, execute the tasks sequentially in the same stage order. Do not skip a stage and do not edit any task manifest.
 
 Every task is self-contained. Give the worker only the JSON task object and its listed files:
 
@@ -115,6 +115,8 @@ Every task is self-contained. Give the worker only the JSON task object and its 
 Workers must not edit shared manifests, source files, credentials, cookies, unrelated outputs, or any path not listed in `allowed_write_paths`. Report-writing tasks must write final Markdown reports with the required report structure below.
 
 Agent 的目标是 report quality，不是填完文件。不要把 OCR/ASR 机械填进报告，也不要用脚本批量生成浅层 JSON 来伪装已经理解了 talk。
+
+For final report writing, one `agent_report_tasks.json` item equals one dedicated report-writing subagent when the host supports subagents: one subagent per report, not one shared writer across talks. That worker must build topic-level understanding before writing: read the metadata, full ASR transcript or timeline, preserved slide screenshots, OCR evidence, slide cognition outputs, QA outputs, and any synthesis manifests for that assigned topic. The worker should understand the research problem, method, experiments, results, limitations, and speaker intent first, then write the opening overview and per-slide explanations. OCR, ASR, and screenshots are evidence for understanding, not report prose; keep slide screenshots available, but do not turn noisy OCR tokens into concepts or force low-information slides into generic explanations.
 
 Quality expectations by stage:
 

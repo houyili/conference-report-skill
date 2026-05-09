@@ -3,6 +3,7 @@ from pathlib import Path
 
 
 SKILL_PATH = Path(__file__).resolve().parents[1] / "skills" / "conference-report" / "SKILL.md"
+AGENTS_PATH = Path(__file__).resolve().parents[1] / "AGENTS.md"
 
 
 class ConferenceReportSkillTextTests(unittest.TestCase):
@@ -75,6 +76,23 @@ class ConferenceReportSkillTextTests(unittest.TestCase):
         self.assertIn("grounding_revision", text)
         self.assertIn("不要把 OCR/ASR 机械填进报告", text)
         self.assertIn("validate → revise → resume", text)
+
+    def test_agents_documents_report_subagent_invariant(self):
+        text = AGENTS_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("Agent-Native Report Writing Invariant", text)
+        self.assertIn("one clean subagent context per report", text)
+        self.assertIn("topic-level understanding before writing", text)
+        self.assertIn("OCR, ASR, and screenshots are evidence for understanding", text)
+        self.assertIn("Codex, Claude Code, Antigravity, OpenClaw", text)
+
+    def test_skill_mirrors_report_subagent_invariant_for_installed_users(self):
+        text = SKILL_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("one clean subagent context per report", text)
+        self.assertIn("one `agent_report_tasks.json` item equals one dedicated report-writing subagent", text)
+        self.assertIn("topic-level understanding before writing", text)
+        self.assertIn("OCR, ASR, and screenshots are evidence for understanding", text)
 
 
 if __name__ == "__main__":

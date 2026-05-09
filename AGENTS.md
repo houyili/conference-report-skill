@@ -16,6 +16,18 @@ Treat open-source usability as the default design constraint for CLI behavior, s
 
 Agent-hosted report writing should use the host platform's own subagents by default. The Python CLI prepares per-talk evidence and task manifests with `--writer agent`; OpenAI API keys are only required for pure CLI `--writer openai` writing or OpenAI ASR fallback.
 
+## Agent-Native Report Writing Invariant
+
+For `--writer agent` runs, each final reportable talk, speech session, topic, keynote, or panel must be written by a dedicated report-writing subagent in the user's current agent framework, such as Codex, Claude Code, Antigravity, OpenClaw, or another compatible host. The Python CLI prepares materials and task manifests; it must not replace the host agent's report-writing role unless the user explicitly selects a pure CLI writer such as `--writer openai` or `--writer evidence`.
+
+Use one clean subagent context per report. A report-writing subagent should focus only on its assigned topic and should not carry context from other talks, installer/debugging work, main-agent orchestration, or unrelated generated artifacts. This isolation is intentional: it improves reading comprehension, prevents cross-session contamination, and lets the worker reason deeply about one talk.
+
+The report-writing subagent must build a topic-level understanding before writing. It should read the talk metadata, full ASR transcript or timeline, all preserved slide screenshots, OCR evidence, slide cognition outputs, QA outputs, and any synthesis manifests for that topic. The first job is to understand the whole talk: the research problem, method, experiments, results, limitations, and speaker intent. Only after that should it write the opening overview and then the per-slide explanations.
+
+OCR, ASR, and screenshots are evidence for understanding, not report prose. Do not mechanically copy OCR/ASR into the report, do not turn noisy OCR tokens into concepts, and do not force every slide into a generic explanation. Full slide screenshots should remain available in the report or its appendix, but text should be readable, grounded, and faithful to the speaker's meaning.
+
+The parent agent and CLI remain the workflow controllers. The parent agent may spawn or coordinate subagents, but it must execute only the CLI-generated task manifests, respect `allowed_write_paths`, run validation, and resume only after validation passes. Subagents write assigned outputs; they do not choose the pipeline order, edit manifests, skip gates, or mark reports complete.
+
 ## Installer UX
 
 The primary first-time install path for normal users is `python3 scripts/install.py`. It must be an interactive guided flow that explains each prompt, the meaning of each choice, and the recommended default. Command-line flags such as `--with-dev`, `--with-local-asr`, and `--no-venv` are for automation, contributors, and advanced users; do not make first-time users discover the right flags by reading source.
