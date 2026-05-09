@@ -237,11 +237,112 @@ def validate_task_contract(task: dict[str, Any], *, final: bool) -> dict[str, An
                     if section in missing_markdown_sections(output_path, [str(section)]):
                         task_errors.append(f"Missing required section {section} in {output}")
                 task_errors.extend(markdown_image_errors(output_path))
+                task_errors.extend(
+                    validate_report_execution_provenance(
+                        task,
+                        allowed_paths=allowed_paths,
+                        input_paths=input_paths,
+                        dependency_paths=dependency_paths,
+                        output_paths=output_paths,
+                    )
+                )
             elif isinstance(task.get("required_schema"), dict):
                 task_errors.extend(validate_declared_json_schema(output_path, task["required_schema"]))
             else:
                 task_errors.extend(validate_json_schema(output_path, stage))
     return {"task_id": task_id, "stage": stage, "ok": not task_errors, "errors": task_errors}
+
+
+def validate_report_execution_provenance(
+    task: dict[str, Any],
+    *,
+    allowed_paths: set[str],
+    input_paths: list[str],
+    dependency_paths: list[str],
+    output_paths: list[str],
+) -> list[str]:
+    task_id = str(task.get("task_id", "<missing>"))
+    slug = str(task.get("slug", ""))
+    errors: list[str] = []
+    provenance_path_value = task.get("execution_provenance_path")
+    required_provenance = task.get("required_provenance")
+    if not provenance_path_value and isinstance(required_provenance, dict):
+        provenance_path_value = required_provenance.get("path")
+    if not provenance_path_value:
+        return [f"Task {task_id} missing execution_provenance_path"]
+    provenance_path = Path(normalize_path(str(provenance_path_value)))
+    provenance_norm = str(provenance_path)
+    if provenance_norm not in allowed_paths:
+        errors.append(f"Task {task_id} execution provenance {provenance_norm} is not listed in allowed_write_paths")
+    if not provenance_path.exists():
+        errors.append(f"Missing report execution provenance for {task_id}: {provenance_norm}")
+        return errors
+    try:
+        provenance = read_json(provenance_path)
+    except Exception as exc:
+        return [f"Invalid report execution provenance for {task_id}: {exc}"]
+    if not isinstance(provenance, dict):
+        return [f"Report execution provenance for {task_id} must be a JSON object"]
+    required_fields = {
+        "host_agent_framework",
+        "worker_type",
+        "worker_id",
+        "isolation_scope",
+        "assigned_task_id",
+        "assigned_slug",
+        "topic_understanding_confirmed",
+        "input_paths_read",
+        "output_paths_written",
+        "allowed_write_paths",
+    }
+    missing_fields = sorted(required_fields - set(provenance))
+    errors.extend(f"Report execution provenance for {task_id} missing {field}" for field in missing_fields)
+    if missing_fields:
+        return errors
+    if not str(provenance.get("host_agent_framework", "")).strip():
+        errors.append(f"Report execution provenance host_agent_framework is empty for {task_id}")
+    if not str(provenance.get("worker_id", "")).strip():
+        errors.append(f"Report execution provenance worker_id is empty for {task_id}")
+    if provenance.get("worker_type") != "subagent":
+        errors.append(f"Report execution provenance worker_type must be subagent for {task_id}")
+    if provenance.get("isolation_scope") != "single_report":
+        errors.append(f"Report execution provenance isolation_scope must be single_report for {task_id}")
+    if provenance.get("assigned_task_id") != task_id:
+        errors.append(f"Report execution provenance assigned_task_id does not match {task_id}")
+    if slug and provenance.get("assigned_slug") != slug:
+        errors.append(f"Report execution provenance assigned_slug does not match {slug}")
+    if provenance.get("topic_understanding_confirmed") is not True:
+        errors.append(f"Report execution provenance topic_understanding_confirmed must be true for {task_id}")
+    input_paths_read = provenance.get("input_paths_read")
+    output_paths_written = provenance.get("output_paths_written")
+    provenance_allowed_paths = provenance.get("allowed_write_paths")
+    if not isinstance(input_paths_read, list):
+        errors.append(f"Report execution provenance input_paths_read must be an array for {task_id}")
+        input_paths_read = []
+    if not isinstance(output_paths_written, list):
+        errors.append(f"Report execution provenance output_paths_written must be an array for {task_id}")
+        output_paths_written = []
+    if not isinstance(provenance_allowed_paths, list):
+        errors.append(f"Report execution provenance allowed_write_paths must be an array for {task_id}")
+        provenance_allowed_paths = []
+    read_norm = {normalize_path(path) for path in input_paths_read if isinstance(path, str)}
+    expected_reads = set(input_paths + dependency_paths)
+    missing_reads = sorted(path for path in expected_reads if path not in read_norm)
+    if missing_reads:
+        errors.append(f"Report execution provenance missing input_paths_read for {task_id}: {missing_reads[:3]}")
+    written_norm = {normalize_path(path) for path in output_paths_written if isinstance(path, str)}
+    expected_writes = set(output_paths + [provenance_norm])
+    missing_writes = sorted(path for path in expected_writes if path not in written_norm)
+    if missing_writes:
+        errors.append(f"Report execution provenance missing output_paths_written for {task_id}: {missing_writes[:3]}")
+    outside_writes = sorted(path for path in written_norm if path not in allowed_paths)
+    if outside_writes:
+        errors.append(f"Report execution provenance lists writes outside allowed_write_paths for {task_id}: {outside_writes[:3]}")
+    provenance_allowed_norm = {normalize_path(path) for path in provenance_allowed_paths if isinstance(path, str)}
+    missing_allowed = sorted(path for path in allowed_paths if path not in provenance_allowed_norm)
+    if missing_allowed:
+        errors.append(f"Report execution provenance missing allowed_write_paths for {task_id}: {missing_allowed[:3]}")
+    return errors
 
 
 def validate_dedupe_review_tasks(out_dir: Path, errors: list[str]) -> dict[str, Any]:
@@ -657,6 +758,10 @@ def write_quality_repair_tasks(out_dir: Path, report_results: list[dict[str, Any
                 }
             )
         if "report_revision_required" in issue_types and report_outputs:
+            provenance_path = report_task.get("execution_provenance_path")
+            report_allowed_writes = list(report_outputs)
+            if isinstance(provenance_path, str) and provenance_path not in report_allowed_writes:
+                report_allowed_writes.append(provenance_path)
             report_revision_tasks.append(
                 {
                     "task_id": f"report-revision:{slug}",
@@ -666,16 +771,20 @@ def write_quality_repair_tasks(out_dir: Path, report_results: list[dict[str, Any
                     "input_paths": list(report_task.get("input_paths", [])) + [str(quality_path)],
                     "dependency_output_paths": cognition_outputs + qa_outputs,
                     "output_paths": report_outputs,
-                    "allowed_write_paths": report_outputs,
+                    "allowed_write_paths": report_allowed_writes,
+                    "execution_provenance_path": provenance_path,
+                    "requires_subagent": True,
+                    "required_provenance": report_task.get("required_provenance"),
                     "required_sections": report_task.get("required_sections", REPORT_REQUIRED_SECTIONS),
                     "validation_rules": [
                         {"type": "exists", "paths": "output_paths"},
                         {"type": "markdown_required_sections", "sections": report_task.get("required_sections", REPORT_REQUIRED_SECTIONS)},
+                        {"type": "execution_provenance", "worker_type": "subagent", "isolation_scope": "single_report"},
                         {"type": "report_quality"},
                         {"type": "allowed_writes"},
                     ],
                     "quality_errors": result.get("report_errors", [])[:8],
-                    "done_condition": "Rewrite only this Markdown report after cognition and QA revisions are complete.",
+                    "done_condition": "Rewrite this Markdown report and update execution provenance after cognition and QA revisions are complete.",
                 }
             )
         if "grounding_revision_required" in issue_types and grounding_outputs:

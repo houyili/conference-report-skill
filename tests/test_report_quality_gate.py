@@ -23,7 +23,8 @@ def make_agent_quality_run(out: Path, *, slug: str = "talk_one") -> dict[str, Pa
     grounding = reports_dir / f"{slug}.grounding.json"
     cognition = talk_dir / "slide_cognition" / "0001.json"
     qa = talk_dir / "qa" / "qa_pairs.json"
-    for path in [cognition, qa]:
+    provenance = talk_dir / "agent_execution" / "report_writer_provenance.json"
+    for path in [cognition, qa, provenance]:
         path.parent.mkdir(parents=True, exist_ok=True)
     write_json(
         talk_dir / "metadata.json",
@@ -156,9 +157,21 @@ def make_agent_quality_run(out: Path, *, slug: str = "talk_one") -> dict[str, Pa
                 ],
                 "dependency_output_paths": [str(cognition.resolve()), str(qa.resolve())],
                 "output_paths": [str(report.resolve())],
-                "allowed_write_paths": [str(report.resolve())],
+                "allowed_write_paths": [str(report.resolve()), str(provenance.resolve())],
+                "execution_provenance_path": str(provenance.resolve()),
+                "requires_subagent": True,
+                "required_provenance": {
+                    "path": str(provenance.resolve()),
+                    "worker_type": "subagent",
+                    "isolation_scope": "single_report",
+                },
                 "required_sections": ["摘要", "核心 Findings / Experiments / Insights", "逐页 PPT 解读", "QA"],
-                "validation_rules": [{"type": "exists"}, {"type": "markdown_required_sections"}, {"type": "allowed_writes"}],
+                "validation_rules": [
+                    {"type": "exists"},
+                    {"type": "markdown_required_sections"},
+                    {"type": "execution_provenance", "worker_type": "subagent", "isolation_scope": "single_report"},
+                    {"type": "allowed_writes"},
+                ],
             }
         ],
     )
@@ -186,7 +199,7 @@ def make_agent_quality_run(out: Path, *, slug: str = "talk_one") -> dict[str, Pa
             }
         ],
     )
-    return {"talk_dir": talk_dir, "slide": slide, "report": report, "grounding": grounding, "cognition": cognition, "qa": qa}
+    return {"talk_dir": talk_dir, "slide": slide, "report": report, "grounding": grounding, "cognition": cognition, "qa": qa, "provenance": provenance}
 
 
 def write_good_agent_outputs(paths: dict[str, Path]) -> None:
@@ -254,6 +267,28 @@ def write_good_agent_outputs(paths: dict[str, Path]) -> None:
             "confidence": 0.82,
         },
     )
+    write_json(
+        paths["provenance"],
+        {
+            "host_agent_framework": "codex",
+            "worker_type": "subagent",
+            "worker_id": "quality-test-worker",
+            "isolation_scope": "single_report",
+            "assigned_task_id": f"report:{paths['report'].stem}",
+            "assigned_slug": paths["report"].stem,
+            "topic_understanding_confirmed": True,
+            "input_paths_read": [
+                str((paths["talk_dir"] / "evidence.json").resolve()),
+                str((paths["talk_dir"] / "metadata.json").resolve()),
+                str((paths["talk_dir"] / "timeline.txt").resolve()),
+                str((paths["talk_dir"] / "slides").resolve()),
+                str(paths["cognition"].resolve()),
+                str(paths["qa"].resolve()),
+            ],
+            "output_paths_written": [str(paths["report"].resolve()), str(paths["provenance"].resolve())],
+            "allowed_write_paths": [str(paths["report"].resolve()), str(paths["provenance"].resolve())],
+        },
+    )
 
 
 def write_bad_quality_outputs(paths: dict[str, Path]) -> None:
@@ -278,6 +313,28 @@ def write_bad_quality_outputs(paths: dict[str, Path]) -> None:
         encoding="utf-8",
     )
     write_json(paths["grounding"], {"grounded": True, "issues": [], "confidence": 0.8})
+    write_json(
+        paths["provenance"],
+        {
+            "host_agent_framework": "codex",
+            "worker_type": "subagent",
+            "worker_id": "quality-test-worker",
+            "isolation_scope": "single_report",
+            "assigned_task_id": f"report:{paths['report'].stem}",
+            "assigned_slug": paths["report"].stem,
+            "topic_understanding_confirmed": True,
+            "input_paths_read": [
+                str((paths["talk_dir"] / "evidence.json").resolve()),
+                str((paths["talk_dir"] / "metadata.json").resolve()),
+                str((paths["talk_dir"] / "timeline.txt").resolve()),
+                str((paths["talk_dir"] / "slides").resolve()),
+                str(paths["cognition"].resolve()),
+                str(paths["qa"].resolve()),
+            ],
+            "output_paths_written": [str(paths["report"].resolve()), str(paths["provenance"].resolve())],
+            "allowed_write_paths": [str(paths["report"].resolve()), str(paths["provenance"].resolve())],
+        },
+    )
 
 
 class ReportQualityGateTests(unittest.TestCase):
@@ -346,6 +403,9 @@ class ReportQualityGateTests(unittest.TestCase):
             report_revision_tasks = read_json(out / "agent_report_revision_tasks.json")
             self.assertEqual(report_revision_tasks[0]["stage"], "report_revision")
             self.assertEqual(report_revision_tasks[0]["output_paths"], [str(paths["report"].resolve())])
+            self.assertEqual(report_revision_tasks[0]["execution_provenance_path"], str(paths["provenance"].resolve()))
+            self.assertIn(str(paths["provenance"].resolve()), report_revision_tasks[0]["allowed_write_paths"])
+            self.assertTrue(report_revision_tasks[0]["requires_subagent"])
 
             grounding_revision_tasks = read_json(out / "agent_grounding_revision_tasks.json")
             self.assertEqual(grounding_revision_tasks[0]["stage"], "grounding_revision")

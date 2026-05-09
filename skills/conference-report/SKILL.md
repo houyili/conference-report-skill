@@ -111,12 +111,15 @@ Every task is self-contained. Give the worker only the JSON task object and its 
 - `output_paths`: files this task must produce
 - `allowed_write_paths`: the only paths this task may create or replace
 - `required_sections`, `required_schema`, and `validation_rules`: completion criteria
+- `execution_provenance_path` and `required_provenance` for report-writing tasks: proof that the final report was written by an isolated subagent
 
 Workers must not edit shared manifests, source files, credentials, cookies, unrelated outputs, or any path not listed in `allowed_write_paths`. Report-writing tasks must write final Markdown reports with the required report structure below.
 
 Agent 的目标是 report quality，不是填完文件。不要把 OCR/ASR 机械填进报告，也不要用脚本批量生成浅层 JSON 来伪装已经理解了 talk。
 
 For final report writing, one `agent_report_tasks.json` item equals one dedicated report-writing subagent when the host supports subagents: one subagent per report, not one shared writer across talks. That worker must build topic-level understanding before writing: read the metadata, full ASR transcript or timeline, preserved slide screenshots, OCR evidence, slide cognition outputs, QA outputs, and any synthesis manifests for that assigned topic. The worker should understand the research problem, method, experiments, results, limitations, and speaker intent first, then write the opening overview and per-slide explanations. OCR, ASR, and screenshots are evidence for understanding, not report prose; keep slide screenshots available, but do not turn noisy OCR tokens into concepts or force low-information slides into generic explanations.
+
+Report-writing tasks must also write `report_writer_provenance.json` to the task's `execution_provenance_path`. This is a hard final gate, not optional metadata. The JSON must include `worker_type: subagent`, `isolation_scope: single_report`, `host_agent_framework`, `worker_id`, `assigned_task_id`, `assigned_slug`, `topic_understanding_confirmed: true`, `input_paths_read`, `output_paths_written`, and `allowed_write_paths`. If `validate --phase final` cannot verify this provenance, the run is not complete.
 
 Quality expectations by stage:
 
@@ -182,6 +185,7 @@ Each run directory should contain:
 - `talks/<talk_slug>/evidence.json`: OCR plus ASR evidence per reportable slide
 - `talks/<talk_slug>/slide_cognition/*.json`: persistent agent/VLM cognition for each slide task
 - `talks/<talk_slug>/qa/qa_pairs.json`: persistent QA pair detection output
+- `talks/<talk_slug>/agent_execution/report_writer_provenance.json`: required proof that the report was written by one isolated subagent
 - `talks/<talk_slug>/report_writer_prompt.md`: writer instructions
 - `agent_slide_cognition_tasks.json`: one bounded cognition task per evidence slide when `--writer agent` is used
 - `agent_qa_tasks.json`: one bounded QA detection task per reportable talk/topic

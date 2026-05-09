@@ -93,6 +93,9 @@ class ConferenceReportSkillTextTests(unittest.TestCase):
         self.assertIn("one `agent_report_tasks.json` item equals one dedicated report-writing subagent", text)
         self.assertIn("topic-level understanding before writing", text)
         self.assertIn("OCR, ASR, and screenshots are evidence for understanding", text)
+        self.assertIn("report_writer_provenance.json", text)
+        self.assertIn("worker_type: subagent", text)
+        self.assertIn("validate --phase final", text)
 
 
 if __name__ == "__main__":

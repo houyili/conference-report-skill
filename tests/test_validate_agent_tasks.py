@@ -79,7 +79,13 @@ def make_evidence_scaffold(out: Path) -> None:
     write_json(out / "segmentation" / "talks.json", [{"talk_id": "talk_one", "slug": "talk_one", "reportable": True}])
 
 
-def write_required_agent_outputs(out: Path, *, report_text: str | None = None) -> None:
+def write_required_agent_outputs(
+    out: Path,
+    *,
+    report_text: str | None = None,
+    write_provenance: bool = True,
+    provenance_worker_type: str = "subagent",
+) -> None:
     for manifest_name in ["agent_slide_cognition_tasks.json", "agent_qa_tasks.json", "agent_grounding_tasks.json"]:
         for task in read_json(out / manifest_name):
             for output in task["output_paths"]:
@@ -133,6 +139,27 @@ def write_required_agent_outputs(out: Path, *, report_text: str | None = None) -
                 "## QA\n\n未能可靠形成 QA：No reliable QA pair was detected in this short test timeline.\n",
                 encoding="utf-8",
             )
+        if write_provenance:
+            provenance_path = Path(
+                task.get("execution_provenance_path")
+                or Path(task["report_path"]).with_suffix(".provenance.json")
+            )
+            provenance_path.parent.mkdir(parents=True, exist_ok=True)
+            write_json(
+                provenance_path,
+                {
+                    "host_agent_framework": "codex",
+                    "worker_type": provenance_worker_type,
+                    "worker_id": "subagent-test-worker",
+                    "isolation_scope": "single_report",
+                    "assigned_task_id": task["task_id"],
+                    "assigned_slug": task["slug"],
+                    "topic_understanding_confirmed": True,
+                    "input_paths_read": task["input_paths"] + task.get("dependency_output_paths", []),
+                    "output_paths_written": task["output_paths"] + [str(provenance_path.resolve())],
+                    "allowed_write_paths": task.get("allowed_write_paths", task["output_paths"]),
+                },
+            )
 
 
 class AgentTaskValidationTests(unittest.TestCase):
@@ -178,6 +205,34 @@ class AgentTaskValidationTests(unittest.TestCase):
             result = validate_run(out, phase="final")
             self.assertFalse(result["ok"])
             self.assertTrue(any("Missing required section" in error for error in result["errors"]))
+
+    def test_final_validation_rejects_missing_report_subagent_provenance(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            make_evidence_scaffold(out)
+            make_talk(out, "talk_one", "Talk One")
+            with mock.patch("conference_report.report.ocr_slide_text", return_value="Method slide"):
+                generate_reports(out, make_cfg(), writer="agent")
+
+            write_required_agent_outputs(out, write_provenance=False)
+            result = validate_run(out, phase="final")
+
+            self.assertFalse(result["ok"])
+            self.assertTrue(any("Missing report execution provenance" in error for error in result["errors"]))
+
+    def test_final_validation_rejects_report_written_without_subagent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            make_evidence_scaffold(out)
+            make_talk(out, "talk_one", "Talk One")
+            with mock.patch("conference_report.report.ocr_slide_text", return_value="Method slide"):
+                generate_reports(out, make_cfg(), writer="agent")
+
+            write_required_agent_outputs(out, provenance_worker_type="same_context")
+            result = validate_run(out, phase="final")
+
+            self.assertFalse(result["ok"])
+            self.assertTrue(any("worker_type must be subagent" in error for error in result["errors"]))
 
     def test_agent_task_validation_rejects_outputs_outside_allowed_write_paths(self):
         with tempfile.TemporaryDirectory() as tmp:

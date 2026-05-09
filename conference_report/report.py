@@ -513,6 +513,7 @@ def agent_report_task(
 ) -> dict[str, Any]:
     dependency_outputs = [output for task in cognition_tasks for output in task["output_paths"]]
     dependency_outputs.extend(qa_task["output_paths"])
+    provenance_path = (ensure_dir(talk_dir / "agent_execution") / "report_writer_provenance.json").resolve()
     return {
         "task_id": f"report:{metadata['slug']}",
         "stage": "report_write",
@@ -525,6 +526,8 @@ def agent_report_task(
         "metadata_path": str((talk_dir / "metadata.json").resolve()),
         "timeline_path": str((talk_dir / "timeline.txt").resolve()),
         "report_path": str(report_path.resolve()),
+        "execution_provenance_path": str(provenance_path),
+        "requires_subagent": True,
         "input_paths": [
             str((talk_dir / "report_writer_prompt.md").resolve()),
             str((talk_dir / "evidence.json").resolve()),
@@ -534,13 +537,31 @@ def agent_report_task(
         ],
         "dependency_output_paths": dependency_outputs,
         "output_paths": [str(report_path.resolve())],
-        "allowed_write_paths": [str(report_path.resolve())],
+        "allowed_write_paths": [str(report_path.resolve()), str(provenance_path)],
         "required_sections": REPORT_REQUIRED_SECTIONS,
+        "required_provenance": {
+            "path": str(provenance_path),
+            "worker_type": "subagent",
+            "isolation_scope": "single_report",
+            "required_fields": [
+                "host_agent_framework",
+                "worker_type",
+                "worker_id",
+                "isolation_scope",
+                "assigned_task_id",
+                "assigned_slug",
+                "topic_understanding_confirmed",
+                "input_paths_read",
+                "output_paths_written",
+                "allowed_write_paths",
+            ],
+        },
         "validation_rules": [
             {"type": "exists", "paths": "output_paths"},
             {"type": "markdown_required_sections", "sections": REPORT_REQUIRED_SECTIONS},
             {"type": "markdown_image_links_exist"},
             {"type": "consume_slide_cognition_and_qa_pairs"},
+            {"type": "execution_provenance", "worker_type": "subagent", "isolation_scope": "single_report"},
             {"type": "report_quality"},
             {"type": "allowed_writes"},
         ],
@@ -557,9 +578,10 @@ def agent_report_task(
             "one clean subagent context per report",
             "topic-level understanding before writing",
             "OCR, ASR, and screenshots are evidence for understanding",
+            "write execution provenance to execution_provenance_path with worker_type=subagent and isolation_scope=single_report",
             "the subagent writes only output_paths and allowed_write_paths; the parent agent and CLI validate and resume",
         ],
-        "done_condition": "Write exactly one quality-gated Markdown report to output_paths[0] after dependency_output_paths exist; it must pass validate --phase report-quality.",
+        "done_condition": "Write exactly one quality-gated Markdown report to output_paths[0] and one execution provenance JSON to execution_provenance_path after dependency_output_paths exist; both must pass validate --phase final.",
     }
 
 

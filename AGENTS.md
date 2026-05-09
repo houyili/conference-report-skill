@@ -28,6 +28,8 @@ OCR, ASR, and screenshots are evidence for understanding, not report prose. Do n
 
 The parent agent and CLI remain the workflow controllers. The parent agent may spawn or coordinate subagents, but it must execute only the CLI-generated task manifests, respect `allowed_write_paths`, run validation, and resume only after validation passes. Subagents write assigned outputs; they do not choose the pipeline order, edit manifests, skip gates, or mark reports complete.
 
+Hard orchestration requires report-writing provenance. Each report-writing task must name an `execution_provenance_path`, and the subagent must write that JSON beside the final report. Final validation must fail unless the provenance declares `worker_type: subagent`, `isolation_scope: single_report`, matching task/report identifiers, the input paths read, and the output paths written. Treat missing or non-subagent provenance as an incomplete report, even when the Markdown file exists.
+
 ## Installer UX
 
 The primary first-time install path for normal users is `python3 scripts/install.py`. It must be an interactive guided flow that explains each prompt, the meaning of each choice, and the recommended default. Command-line flags such as `--with-dev`, `--with-local-asr`, and `--no-venv` are for automation, contributors, and advanced users; do not make first-time users discover the right flags by reading source.
