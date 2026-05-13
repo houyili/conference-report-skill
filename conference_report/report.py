@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
+from .agent_flow import AGENT_EXECUTION_PLAN_FILE, write_agent_execution_plan
 from .auth import get_openai_api_key, openai_client_kwargs
 from .utils import ensure_dir, find_tool, parse_time_seconds, read_json, write_json
 
@@ -27,6 +28,9 @@ REPORT_SUBAGENT_FALLBACK_OPTIONS = [
         "description": "Use the pure CLI OpenAI writer with the user's API key or credential store.",
     },
 ]
+
+AGENT_NEUTRAL_PATH_RULE = "Use absolute paths exactly as listed; do not infer or reuse any previous run directory."
+AGENT_ALLOWED_WRITES_RULE = "Write only allowed_write_paths. Do not edit manifests, pipeline_state.json, config, source code, or other talks."
 
 BOILERPLATE_TOKENS = {
     "iclr",
@@ -316,10 +320,23 @@ def write_report_writer_prompt(talk_dir: Path, metadata: dict[str, Any], *, skip
     (talk_dir / "report_writer_prompt.md").write_text(prompt, encoding="utf-8")
 
 
-def build_slide_evidence(talk_dir: Path, metadata: dict[str, Any], intervals: list[dict[str, Any]], timeline: str, cfg: dict[str, Any]) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+def task_prompt_contract(stage: str, slug: str, scope: str, *, parent_sequential_ok: bool, requires_subagent: bool = False) -> dict[str, Any]:
+    return {
+        "agent_neutral": True,
+        "stage": stage,
+        "slug": slug,
+        "scope": scope,
+        "path_rule": AGENT_NEUTRAL_PATH_RULE,
+        "write_rule": AGENT_ALLOWED_WRITES_RULE,
+        "parent_sequential_ok": parent_sequential_ok,
+        "requires_subagent": requires_subagent,
+    }
+
+
+def build_slide_evidence(talk_dir: Path, metadata: dict[str, Any], intervals: list[dict[str, Any]], timeline: str, cfg: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     ocr_dir = ensure_dir(talk_dir / "ocr")
-    evidence: list[dict[str, str]] = []
-    skipped_slides: list[dict[str, str]] = []
+    evidence: list[dict[str, Any]] = []
+    skipped_slides: list[dict[str, Any]] = []
     max_chars = int(cfg["report"].get("max_transcript_chars_per_slide", 2500))
     for original_idx, interval in enumerate(intervals, start=1):
         image = Path(interval.get("talk_slide_path") or interval["representative_path"])
@@ -340,7 +357,20 @@ def build_slide_evidence(talk_dir: Path, metadata: dict[str, Any], intervals: li
             "role": infer_slide_role(f"{ocr_text} {local_text}"),
         }
         if skip_reason:
-            skipped_slides.append({"time": time_label, "image": str(image), "reason": skip_reason})
+            skipped_slides.append(
+                {
+                    "original_slide_index": str(original_idx),
+                    "source_slide_index": str(original_idx),
+                    "time": time_label,
+                    "image": str(image),
+                    "reason": skip_reason,
+                    "role": row["role"],
+                    "ocr_text": row["ocr_text"],
+                    "asr_text": row["asr_text"],
+                    "evidence_only": True,
+                    "report_evidence_only": True,
+                }
+            )
             continue
         evidence.append(row)
     write_json(talk_dir / "evidence.json", evidence)
@@ -349,7 +379,7 @@ def build_slide_evidence(talk_dir: Path, metadata: dict[str, Any], intervals: li
     return evidence, skipped_slides
 
 
-def write_evidence_bundle_report(report_path: Path, metadata: dict[str, Any], evidence: list[dict[str, str]], skipped_slides: list[dict[str, str]]) -> Path:
+def write_evidence_bundle_report(report_path: Path, metadata: dict[str, Any], evidence: list[dict[str, Any]], skipped_slides: list[dict[str, Any]]) -> Path:
     lines = [
         f"# {metadata['title']}",
         "",
@@ -394,7 +424,15 @@ def agent_slide_cognition_tasks(talk_dir: Path, metadata: dict[str, Any], eviden
                 "slug": str(metadata["slug"]),
                 "title": str(metadata["title"]),
                 "slide_index": idx,
+                "local_evidence_index": item.get("local_evidence_index"),
+                "original_slide_index": item.get("original_slide_index"),
                 "time": item["time"],
+                "prompt_contract": task_prompt_contract(
+                    "slide_cognition",
+                    str(metadata["slug"]),
+                    "Understand this single reportable slide from screenshot, evidence, metadata, and timeline.",
+                    parent_sequential_ok=True,
+                ),
                 "input_paths": [
                     str((talk_dir / "metadata.json").resolve()),
                     str((talk_dir / "timeline.txt").resolve()),
@@ -450,6 +488,12 @@ def agent_qa_task(talk_dir: Path, metadata: dict[str, Any]) -> dict[str, Any]:
         "stage": "qa_detection",
         "slug": str(metadata["slug"]),
         "title": str(metadata["title"]),
+        "prompt_contract": task_prompt_contract(
+            "qa_detection",
+            str(metadata["slug"]),
+            "Detect reliable Q&A pairs for this talk only; leave qa_pairs empty when no reliable exchange exists.",
+            parent_sequential_ok=True,
+        ),
         "input_paths": [
             str((talk_dir / "metadata.json").resolve()),
             str((talk_dir / "timeline.txt").resolve()),
@@ -485,6 +529,12 @@ def agent_grounding_task(talk_dir: Path, report_path: Path, metadata: dict[str, 
         "stage": "grounding_review",
         "slug": str(metadata["slug"]),
         "title": str(metadata["title"]),
+        "prompt_contract": task_prompt_contract(
+            "grounding_review",
+            str(metadata["slug"]),
+            "Review the assigned final report against its evidence, slide cognition, QA, and images at claim level.",
+            parent_sequential_ok=True,
+        ),
         "input_paths": [
             str((talk_dir / "metadata.json").resolve()),
             str((talk_dir / "evidence.json").resolve()),
@@ -556,6 +606,13 @@ def agent_report_task(
         "synthesis_path": str(synthesis_path),
         "execution_provenance_path": str(provenance_path),
         "requires_subagent": True,
+        "prompt_contract": task_prompt_contract(
+            "report_write",
+            str(metadata["slug"]),
+            "One clean subagent context writes this talk synthesis, final report, and provenance only.",
+            parent_sequential_ok=False,
+            requires_subagent=True,
+        ),
         "input_paths": [
             str((talk_dir / "report_writer_prompt.md").resolve()),
             str((talk_dir / "evidence.json").resolve()),
@@ -633,6 +690,7 @@ def agent_report_dispatch_plan(out_dir: Path, report_tasks: list[dict[str, Any]]
             "missing_paths": missing_dependencies[:10],
             "invalid_dependencies": [],
             "ready": not missing_dependencies,
+            "validation_state": "unvalidated",
         }
         workers.append(
             {
@@ -649,6 +707,7 @@ def agent_report_dispatch_plan(out_dir: Path, report_tasks: list[dict[str, Any]]
                 "input_paths": task.get("input_paths", []),
                 "dependency_output_paths": task.get("dependency_output_paths", []),
                 "dependency_validation_phase": "agent-tasks",
+                "dependency_validation_state": "unvalidated",
                 "expected_dependency_count": dependency_status["expected"],
                 "dependencies_ready": dependency_status["ready"],
                 "dependency_status": dependency_status,
@@ -663,6 +722,8 @@ def agent_report_dispatch_plan(out_dir: Path, report_tasks: list[dict[str, Any]]
         "stage": "report_write",
         "requires_subagents": True,
         "required_report_subagents": len(report_tasks),
+        "dependency_validation_state": "unvalidated",
+        "agent_tasks_validation_ok": None,
         "dependencies_ready_count": sum(1 for worker in workers if worker["dependencies_ready"]),
         "dependencies_blocked_count": sum(1 for worker in workers if not worker["dependencies_ready"]),
         "subagent_required_stage": "report_write",
@@ -673,7 +734,7 @@ def agent_report_dispatch_plan(out_dir: Path, report_tasks: list[dict[str, Any]]
             "Dispatch exactly one clean subagent context per worker item.",
             "Give each worker only its task object and the listed input/dependency paths.",
             "Wait for report Markdown and report_writer_provenance.json outputs.",
-            "Run validate --phase final, then resume only after validation passes.",
+            "Run validate --phase agent-tasks before dispatching report writers, then validate --phase final and resume only after validation passes.",
         ],
         "workers": workers,
     }
@@ -802,7 +863,14 @@ def generate_reports(out_dir: Path, cfg: dict[str, Any], *, dry_run: bool | None
     if writer_mode == "agent":
         for stage, path in task_manifest_paths.items():
             write_json(path, agent_tasks.get(stage, []))
-        write_json(out_dir / REPORT_DISPATCH_PLAN_FILE, agent_report_dispatch_plan(out_dir, agent_tasks["report_write"]))
+        dispatch_plan = agent_report_dispatch_plan(out_dir, agent_tasks["report_write"])
+        write_json(out_dir / REPORT_DISPATCH_PLAN_FILE, dispatch_plan)
+        write_agent_execution_plan(
+            out_dir,
+            agent_tasks,
+            dispatch_plan=dispatch_plan,
+            dependency_validation_state="unvalidated",
+        )
     else:
         for path in task_manifest_paths.values():
             if path.exists():
@@ -810,6 +878,9 @@ def generate_reports(out_dir: Path, cfg: dict[str, Any], *, dry_run: bool | None
         dispatch_plan_path = out_dir / REPORT_DISPATCH_PLAN_FILE
         if dispatch_plan_path.exists():
             dispatch_plan_path.unlink()
+        execution_plan_path = out_dir / AGENT_EXECUTION_PLAN_FILE
+        if execution_plan_path.exists():
+            execution_plan_path.unlink()
 
     planned_reports = [str(path.resolve()) for path in report_paths]
     completed_reports = [path for path in planned_reports if Path(path).exists()]
@@ -829,6 +900,7 @@ def generate_reports(out_dir: Path, cfg: dict[str, Any], *, dry_run: bool | None
     if writer_mode == "agent":
         manifest["task_manifests"] = {stage: str(path.resolve()) for stage, path in task_manifest_paths.items()}
         manifest["task_manifests"]["report_dispatch"] = str((out_dir / REPORT_DISPATCH_PLAN_FILE).resolve())
+        manifest["task_manifests"]["agent_execution_plan"] = str((out_dir / AGENT_EXECUTION_PLAN_FILE).resolve())
         manifest["tasks_manifest"] = str(task_manifest_paths["report_write"].resolve())
         manifest["task_count"] = sum(len(tasks) for tasks in agent_tasks.values())
         manifest["task_counts"] = {stage: len(tasks) for stage, tasks in agent_tasks.items()}

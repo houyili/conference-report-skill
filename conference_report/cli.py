@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from .agent_flow import AGENT_EXECUTION_PLAN_FILE
 from .auth import credential_status, delete_secret, set_secret_interactive
 from .asr import run_asr
 from .config import CONFIG_PROFILES, load_config, write_default_config
@@ -25,7 +26,7 @@ from .report import (
 from .segment import segment
 from .slides import extract_slides
 from .utils import read_json, write_json
-from .validate import QUALITY_REPAIR_MANIFESTS, QUALITY_REPAIR_PLAN_FILE, REVISION_TASKS_FILE, validate_run
+from .validate import AGENT_DEPENDENCY_STATUS_FILE, QUALITY_REPAIR_MANIFESTS, QUALITY_REPAIR_PLAN_FILE, REVISION_TASKS_FILE, validate_run
 
 
 WRITER_CHOICES = ["auto", "agent", "openai", "evidence"]
@@ -125,7 +126,9 @@ def report_task_manifests(out: Path) -> list[str]:
     reports_manifest_path = out / "reports_manifest.json"
     if not reports_manifest_path.exists():
         return [
+            AGENT_EXECUTION_PLAN_FILE,
             REPORT_DISPATCH_PLAN_FILE,
+            AGENT_DEPENDENCY_STATUS_FILE,
             "agent_slide_cognition_tasks.json",
             "agent_qa_tasks.json",
             "agent_report_tasks.json",
@@ -137,9 +140,15 @@ def report_task_manifests(out: Path) -> list[str]:
         manifests = [display_path(str(path)) for path in task_manifests.values()]
         if REPORT_DISPATCH_PLAN_FILE not in manifests:
             manifests.insert(0, REPORT_DISPATCH_PLAN_FILE)
+        if AGENT_EXECUTION_PLAN_FILE not in manifests:
+            manifests.insert(0, AGENT_EXECUTION_PLAN_FILE)
+        if (out / AGENT_DEPENDENCY_STATUS_FILE).exists() and AGENT_DEPENDENCY_STATUS_FILE not in manifests:
+            manifests.insert(1, AGENT_DEPENDENCY_STATUS_FILE)
         return manifests
     return [
+        AGENT_EXECUTION_PLAN_FILE,
         REPORT_DISPATCH_PLAN_FILE,
+        AGENT_DEPENDENCY_STATUS_FILE,
         "agent_slide_cognition_tasks.json",
         "agent_qa_tasks.json",
         "agent_report_tasks.json",
@@ -186,6 +195,8 @@ def report_subagent_dispatch_metadata(out: Path) -> dict[str, object]:
                 "slug": worker.get("slug") or task.get("slug"),
                 "report_path": worker.get("report_path") or task.get("report_path"),
                 "execution_provenance_path": worker.get("execution_provenance_path") or task.get("execution_provenance_path"),
+                "dependencies_ready": bool(worker.get("dependencies_ready")),
+                "dependency_status": worker.get("dependency_status") if isinstance(worker.get("dependency_status"), dict) else {},
             }
         )
     required_count = dispatch.get("required_report_subagents") if isinstance(dispatch, dict) else None
@@ -206,6 +217,115 @@ def report_subagent_dispatch_metadata(out: Path) -> dict[str, object]:
     }
 
 
+def report_dependency_summary(out: Path) -> dict[str, object]:
+    dependency_path = out / AGENT_DEPENDENCY_STATUS_FILE
+    if dependency_path.exists():
+        try:
+            dependency = read_json(dependency_path)
+        except Exception:
+            dependency = {}
+        report_tasks = dependency.get("report_tasks") if isinstance(dependency.get("report_tasks"), dict) else {}
+        return {
+            "agent_dependency_status": AGENT_DEPENDENCY_STATUS_FILE,
+            "dependency_validation_state": str(dependency.get("dependency_validation_state") or dependency.get("phase") or "validated"),
+            "agent_tasks_validation_ok": dependency.get("agent_tasks_validation_ok"),
+            "ready_report_tasks": int(dependency.get("ready_report_tasks") or 0),
+            "blocked_report_tasks": int(dependency.get("blocked_report_tasks") or 0),
+            "total_report_tasks": len(report_tasks),
+            "missing_dependency_outputs": int(dependency.get("missing_dependency_outputs") or 0),
+            "invalid_dependency_outputs": int(dependency.get("invalid_dependency_outputs") or 0),
+        }
+    dispatch_path = out / REPORT_DISPATCH_PLAN_FILE
+    try:
+        dispatch = read_json(dispatch_path) if dispatch_path.exists() else {}
+    except Exception:
+        dispatch = {}
+    workers = dispatch.get("workers") if isinstance(dispatch.get("workers"), list) else []
+    ready = 0
+    missing = 0
+    invalid = 0
+    for worker in workers:
+        if not isinstance(worker, dict):
+            continue
+        status = worker.get("dependency_status") if isinstance(worker.get("dependency_status"), dict) else {}
+        if worker.get("dependencies_ready") or status.get("ready"):
+            ready += 1
+        missing += int(status.get("missing") or 0)
+        invalid += int(status.get("invalid") or 0)
+    return {
+        "agent_dependency_status": AGENT_DEPENDENCY_STATUS_FILE if dependency_path.exists() else "",
+        "dependency_validation_state": str(dispatch.get("dependency_validation_state") or "unvalidated"),
+        "agent_tasks_validation_ok": dispatch.get("agent_tasks_validation_ok"),
+        "ready_report_tasks": ready,
+        "blocked_report_tasks": max(0, len(workers) - ready),
+        "total_report_tasks": len(workers),
+        "missing_dependency_outputs": missing,
+        "invalid_dependency_outputs": invalid,
+    }
+
+
+def quality_repair_summary(out: Path) -> dict[str, object]:
+    plan_path = out / QUALITY_REPAIR_PLAN_FILE
+    if not plan_path.exists():
+        return {}
+    try:
+        plan = read_json(plan_path)
+    except Exception:
+        return {"agent_quality_repair_plan": QUALITY_REPAIR_PLAN_FILE}
+    if not isinstance(plan, dict):
+        return {"agent_quality_repair_plan": QUALITY_REPAIR_PLAN_FILE}
+    active_stages = plan.get("active_stages")
+    if not isinstance(active_stages, list):
+        counts = plan.get("active_repair_task_counts") or plan.get("repair_task_counts") or {}
+        active_stages = [stage for stage, count in counts.items() if int(count or 0) > 0]
+    return {
+        "agent_quality_repair_plan": QUALITY_REPAIR_PLAN_FILE,
+        "active_repair_stages": active_stages if not plan.get("resolved") else [],
+        "repair_plan_resolved": bool(plan.get("resolved")),
+        "active_repair_task_counts": plan.get("active_repair_task_counts") or {},
+    }
+
+
+def enrich_agent_flow_state(out: Path, state: dict[str, object]) -> dict[str, object]:
+    enriched = dict(state)
+    if (out / AGENT_EXECUTION_PLAN_FILE).exists() or enriched.get("blocked_gate") == "report_agent":
+        enriched["agent_execution_plan"] = AGENT_EXECUTION_PLAN_FILE
+    if enriched.get("blocked_gate") == "report_agent":
+        enriched.update(report_dependency_summary(out))
+    if enriched.get("blocked_gate") == "report_quality_repair":
+        enriched.update(quality_repair_summary(out))
+    return enriched
+
+
+def validation_command(out: Path, state: dict[str, object], phase: str) -> str:
+    config_arg = f" --config {state['config_path']}" if state.get("config_path") else ""
+    return f"conference-report validate --out {out}{config_arg} --phase {phase}"
+
+
+def refresh_report_gate_after_agent_tasks(out: Path, *, result: dict[str, object]) -> None:
+    state = read_pipeline_state(out)
+    if not state or state.get("blocked_gate") != "report_agent":
+        return
+    enriched = enrich_agent_flow_state(out, state)
+    ready = int(enriched.get("ready_report_tasks") or 0)
+    total = int(enriched.get("total_report_tasks") or 0)
+    invalid = int(enriched.get("invalid_dependency_outputs") or 0)
+    missing = int(enriched.get("missing_dependency_outputs") or 0)
+    if result.get("ok") and total and ready == total and invalid == 0 and missing == 0:
+        enriched["next_allowed_command"] = validation_command(out, enriched, "final")
+        enriched["dispatch_guidance"] = (
+            "Dependency validation passed. Dispatch one clean report_write subagent per ready report task, "
+            "complete grounding_review outputs, then run final validation and resume."
+        )
+    else:
+        enriched["next_allowed_command"] = validation_command(out, enriched, "agent-tasks")
+        enriched["dispatch_guidance"] = (
+            "Complete or repair slide_cognition and qa_detection dependency outputs, then rerun validate --phase agent-tasks. "
+            "Do not dispatch report_write for tasks whose dependencies_ready is false."
+        )
+    write_json(out / "pipeline_state.json", enriched)
+
+
 def pause_for_report_agent(out: Path, args: argparse.Namespace, completed_stages: list[str], writer: str) -> None:
     write_waiting_state(
         out,
@@ -220,16 +340,19 @@ def pause_for_report_agent(out: Path, args: argparse.Namespace, completed_stages
     state = read_pipeline_state(out) or {}
     state["task_manifests"] = report_task_manifests(out)
     state.update(report_subagent_dispatch_metadata(out))
+    state.update(report_dependency_summary(out))
+    if (out / AGENT_EXECUTION_PLAN_FILE).exists():
+        state["agent_execution_plan"] = AGENT_EXECUTION_PLAN_FILE
     state["human_message"] = "\n".join(
         [
             str(state.get("human_message") or ""),
+            "先运行 validate --phase agent-tasks 刷新 dependency readiness；只有 dependencies_ready: true 的 report task 可以 dispatch。",
             "report_write 需要用户明确授权为每个 report task 启动独立 subagent。",
             "父 agent 可以顺序完成 slide_cognition、qa_detection 和 grounding_review，但不能在父上下文里代写最终报告。",
             "如果不授权 subagents，本 run 可以停在 evidence/gate；请改用 --writer evidence 或 --writer openai，不要伪装成 agent-written final report。",
         ]
     ).strip()
-    config_arg = f" --config {state['config_path']}" if state.get("config_path") else ""
-    state["next_allowed_command"] = f"conference-report validate --out {out}{config_arg} --phase final"
+    state["next_allowed_command"] = validation_command(out, state, "agent-tasks")
     write_json(out / "pipeline_state.json", state)
     print(format_state_for_human(state))
 
@@ -239,13 +362,13 @@ def status_state(out: Path) -> dict[str, object] | None:
     if not state:
         return None
     if state.get("blocked_gate") != "report_agent":
-        return state
+        return enrich_agent_flow_state(out, state)
     enriched = dict(state)
     enriched["task_manifests"] = report_task_manifests(out)
     for key, value in report_subagent_dispatch_metadata(out).items():
         if not enriched.get(key):
             enriched[key] = value
-    return enriched
+    return enrich_agent_flow_state(out, enriched)
 
 
 def revision_task_manifests(out: Path) -> list[str]:
@@ -289,6 +412,8 @@ def has_quality_repair_plan(out: Path) -> bool:
         plan = read_json(path)
     except Exception:
         return True
+    if plan.get("resolved"):
+        return False
     failed = plan.get("failed_reports")
     if isinstance(failed, list):
         return len(failed) > 0
@@ -345,6 +470,9 @@ def pause_for_report_quality_repair(out: Path, args: argparse.Namespace, complet
     state["task_manifests"] = quality_repair_task_manifests(out)
     plan_path = out / QUALITY_REPAIR_PLAN_FILE
     plan = read_json(plan_path) if plan_path.exists() else {}
+    state.update(quality_repair_summary(out))
+    if (out / AGENT_EXECUTION_PLAN_FILE).exists():
+        state["agent_execution_plan"] = AGENT_EXECUTION_PLAN_FILE
     failed_reports = plan.get("failed_reports") if isinstance(plan.get("failed_reports"), list) else []
     state["failed_report_count"] = len(failed_reports)
     if failed_reports:
@@ -580,6 +708,8 @@ def main(argv: list[str] | None = None) -> int:
         generate_reports(out, cfg, writer=selected_writer(args))
     elif args.cmd == "validate":
         result = validate_run(out, phase=args.phase)
+        if args.phase == "agent-tasks":
+            refresh_report_gate_after_agent_tasks(out, result=result)
         if args.phase in {"report-quality", "final"} and not result["ok"] and has_quality_repair_plan(out):
             state = read_pipeline_state(out)
             source = state.get("source") if state else None

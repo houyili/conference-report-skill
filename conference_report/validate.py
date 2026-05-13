@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote
 
+from .agent_flow import write_agent_execution_plan
 from .utils import read_json, timeline_lines, write_json
 
 
@@ -336,6 +337,8 @@ def refresh_report_dispatch_plan(
             "missing_paths": missing[:10],
             "invalid_dependencies": invalid[:10],
             "ready": not missing and not invalid,
+            "status": "ready" if not missing and not invalid else "blocked",
+            "validation_state": "validated",
         }
 
     status_by_task_id = {
@@ -384,6 +387,7 @@ def refresh_report_dispatch_plan(
         if not status:
             continue
         worker["dependency_validation_phase"] = "agent-tasks"
+        worker["dependency_validation_state"] = "validated"
         worker["expected_dependency_count"] = status["expected"]
         worker["dependencies_ready"] = bool(status["ready"])
         worker["dependency_status"] = status
@@ -394,6 +398,7 @@ def refresh_report_dispatch_plan(
             "stage": dispatch.get("stage") or "report_write",
             "requires_subagents": True,
             "required_report_subagents": len(report_tasks),
+            "dependency_validation_state": "validated",
             "last_dependency_validation_phase": "agent-tasks",
             "agent_tasks_validation_ok": agent_tasks_ok,
             "dependencies_ready_count": ready_count,
@@ -402,15 +407,24 @@ def refresh_report_dispatch_plan(
         }
     )
     write_json(dispatch_path, dispatch)
-    write_json(
-        out_dir / AGENT_DEPENDENCY_STATUS_FILE,
-        {
-            "ok": agent_tasks_ok and ready_count == len(report_tasks),
-            "phase": "agent-tasks",
-            "report_tasks": status_by_task_id,
-            "ready_report_tasks": ready_count,
-            "blocked_report_tasks": len(report_tasks) - ready_count,
-        },
+    dependency_summary = {
+        "ok": agent_tasks_ok and ready_count == len(report_tasks),
+        "phase": "agent-tasks",
+        "dependency_validation_state": "validated",
+        "agent_tasks_validation_ok": agent_tasks_ok,
+        "report_tasks": status_by_task_id,
+        "ready_report_tasks": ready_count,
+        "blocked_report_tasks": len(report_tasks) - ready_count,
+        "missing_dependency_outputs": sum(item["missing"] for item in status_by_task_id.values()),
+        "invalid_dependency_outputs": sum(item["invalid"] for item in status_by_task_id.values()),
+    }
+    write_json(out_dir / AGENT_DEPENDENCY_STATUS_FILE, dependency_summary)
+    write_agent_execution_plan(
+        out_dir,
+        tasks,
+        dispatch_plan=dispatch,
+        dependency_status=dependency_summary,
+        dependency_validation_state="validated",
     )
 
 
@@ -1059,6 +1073,18 @@ def repair_plan_command(out_dir: Path, command: str) -> str:
     return f"conference-report {command} --out {out_dir} --phase final" if command == "validate" else f"conference-report {command} --out {out_dir}"
 
 
+def repair_prompt_contract(stage: str, slug: str, *, requires_subagent: bool = False) -> dict[str, Any]:
+    return {
+        "agent_neutral": True,
+        "stage": stage,
+        "slug": slug,
+        "path_rule": "Use absolute paths exactly as listed; do not infer or reuse any previous run directory.",
+        "write_rule": "Write only allowed_write_paths. Do not edit manifests, pipeline_state.json, config, source code, or other talks.",
+        "parent_sequential_ok": not requires_subagent,
+        "requires_subagent": requires_subagent,
+    }
+
+
 def write_quality_repair_tasks(out_dir: Path, report_results: list[dict[str, Any]], grouped_tasks: dict[str, dict[str, list[dict[str, Any]]]]) -> None:
     quality_path = (out_dir / REPORT_QUALITY_FILE).resolve()
     cognition_revision_tasks: list[dict[str, Any]] = []
@@ -1099,6 +1125,7 @@ def write_quality_repair_tasks(out_dir: Path, report_results: list[dict[str, Any
                     "stage": "slide_cognition_revision",
                     "slug": slug,
                     "title": title,
+                    "prompt_contract": repair_prompt_contract("slide_cognition_revision", slug),
                     "input_paths": cognition_inputs,
                     "dependency_output_paths": [],
                     "output_paths": cognition_outputs,
@@ -1125,6 +1152,7 @@ def write_quality_repair_tasks(out_dir: Path, report_results: list[dict[str, Any
                     "stage": "qa_revision",
                     "slug": slug,
                     "title": title,
+                    "prompt_contract": repair_prompt_contract("qa_revision", slug),
                     "input_paths": qa_inputs,
                     "dependency_output_paths": cognition_outputs,
                     "output_paths": qa_outputs,
@@ -1163,6 +1191,7 @@ def write_quality_repair_tasks(out_dir: Path, report_results: list[dict[str, Any
                     "stage": "report_revision",
                     "slug": slug,
                     "title": title,
+                    "prompt_contract": repair_prompt_contract("report_revision", slug, requires_subagent=True),
                     "input_paths": list(report_task.get("input_paths", [])) + [str(quality_path)],
                     "dependency_output_paths": cognition_outputs + qa_outputs,
                     "intermediate_output_paths": intermediate_outputs,
@@ -1204,6 +1233,7 @@ def write_quality_repair_tasks(out_dir: Path, report_results: list[dict[str, Any
                     "stage": "grounding_revision",
                     "slug": slug,
                     "title": title,
+                    "prompt_contract": repair_prompt_contract("grounding_revision", slug),
                     "input_paths": grounding_inputs,
                     "dependency_output_paths": report_outputs + cognition_outputs + qa_outputs,
                     "output_paths": grounding_outputs,
@@ -1218,7 +1248,7 @@ def write_quality_repair_tasks(out_dir: Path, report_results: list[dict[str, Any
                     "done_condition": "Rewrite grounding review with non-empty checked_claims after the report has been revised.",
                 }
             )
-    manifests = {
+    all_manifests = {
         "slide_cognition_revision": SLIDE_COGNITION_REVISION_TASKS_FILE,
         "qa_revision": QA_REVISION_TASKS_FILE,
         "report_revision": REVISION_TASKS_FILE,
@@ -1229,9 +1259,19 @@ def write_quality_repair_tasks(out_dir: Path, report_results: list[dict[str, Any
     write_json(out_dir / REVISION_TASKS_FILE, report_revision_tasks)
     write_json(out_dir / GROUNDING_REVISION_TASKS_FILE, grounding_revision_tasks)
     failed_reports = [item for item in report_results if not item.get("ok")]
+    repair_task_counts = {
+        "slide_cognition_revision": len(cognition_revision_tasks),
+        "qa_revision": len(qa_revision_tasks),
+        "report_revision": len(report_revision_tasks),
+        "grounding_revision": len(grounding_revision_tasks),
+    }
+    active_stages = [stage for stage in QUALITY_REPAIR_STAGES if repair_task_counts[stage] > 0]
+    active_manifests = {stage: all_manifests[stage] for stage in active_stages}
     plan = {
         "blocked_gate": "report_quality_repair",
-        "stages": QUALITY_REPAIR_STAGES,
+        "stages": active_stages,
+        "all_stage_order": QUALITY_REPAIR_STAGES,
+        "active_stages": active_stages,
         "reason": "report-quality failed" if failed_reports else "",
         "failed_reports": [
             {
@@ -1243,17 +1283,19 @@ def write_quality_repair_tasks(out_dir: Path, report_results: list[dict[str, Any
             }
             for item in failed_reports
         ],
-        "task_manifests": manifests,
-        "repair_task_counts": {
-            "slide_cognition_revision": len(cognition_revision_tasks),
-            "qa_revision": len(qa_revision_tasks),
-            "report_revision": len(report_revision_tasks),
-            "grounding_revision": len(grounding_revision_tasks),
-        },
+        "task_manifests": active_manifests,
+        "all_task_manifests": all_manifests,
+        "repair_task_counts": repair_task_counts,
+        "active_repair_task_counts": {stage: repair_task_counts[stage] for stage in active_stages},
         "next_allowed_command": repair_plan_command(out_dir, "validate"),
         "resume_command": repair_plan_command(out_dir, "resume"),
     }
     write_json(out_dir / QUALITY_REPAIR_PLAN_FILE, plan)
+    write_agent_execution_plan(
+        out_dir,
+        [task for stage_tasks in grouped_tasks.values() for tasks in stage_tasks.values() for task in tasks],
+        repair_plan=plan,
+    )
 
 
 def resolve_quality_repair_plan(out_dir: Path) -> None:
@@ -1266,27 +1308,43 @@ def resolve_quality_repair_plan(out_dir: Path) -> None:
         return
     if not isinstance(plan, dict):
         return
+    if isinstance(plan.get("failed_reports"), list) and plan.get("failed_reports"):
+        plan["historical_failed_reports"] = plan.get("historical_failed_reports") or plan["failed_reports"]
+    plan["failed_reports"] = []
+    plan["active_stages"] = []
+    plan["active_repair_task_counts"] = {}
     plan["resolved"] = True
     plan["superseded_by"] = REPORT_QUALITY_FILE
     plan["blocked_gate"] = None
     plan["reason"] = "resolved after report-quality validation passed"
     write_json(path, plan)
+    try:
+        tasks = load_task_manifests(out_dir, [], expect_agent=True)
+        write_agent_execution_plan(out_dir, tasks, repair_plan=plan)
+    except Exception:
+        pass
 
 
 def quality_issue_classes(report_errors: list[str]) -> list[str]:
     classes: set[str] = set()
     for error in report_errors:
         lowered = error.lower()
+        if "dependency output" in lowered or "missing task output" in lowered or "invalid json" in lowered:
+            classes.add("dependency")
         if "missing slide coverage" in lowered:
             classes.add("coverage")
+        if "qa_pairs" in lowered or "qa section" in lowered or "qa pair" in lowered:
+            classes.add("qa_usage")
         if "copies long ocr/asr" in lowered or "audit scaffolding" in lowered or "slide_index metadata" in lowered:
             classes.add("scaffolding")
         if "template" in lowered or "repetitive" in lowered or "stock phrase" in lowered:
             classes.add("style")
         if "talk_synthesis" in lowered:
             classes.add("synthesis")
-        if "unsupported" in lowered or "grounding" in lowered or "does not appear to use" in lowered:
-            classes.add("support")
+        if "provenance" in lowered:
+            classes.add("provenance")
+        if "unsupported" in lowered or "grounding" in lowered or "does not appear to use slide_cognition" in lowered:
+            classes.add("grounding")
     return sorted(classes)
 
 

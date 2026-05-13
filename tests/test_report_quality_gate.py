@@ -417,6 +417,7 @@ class ReportQualityGateTests(unittest.TestCase):
                 repair_plan["stages"],
                 ["slide_cognition_revision", "qa_revision", "report_revision", "grounding_revision"],
             )
+            self.assertEqual(repair_plan["active_stages"], repair_plan["stages"])
             self.assertIn("agent_slide_cognition_revision_tasks.json", repair_plan["task_manifests"].values())
             self.assertIn("agent_qa_revision_tasks.json", repair_plan["task_manifests"].values())
             self.assertIn("agent_report_revision_tasks.json", repair_plan["task_manifests"].values())
@@ -424,6 +425,7 @@ class ReportQualityGateTests(unittest.TestCase):
 
             cognition_tasks = read_json(out / "agent_slide_cognition_revision_tasks.json")
             self.assertEqual([task["stage"] for task in cognition_tasks], ["slide_cognition_revision"])
+            self.assertEqual(cognition_tasks[0]["prompt_contract"]["parent_sequential_ok"], True)
             self.assertEqual(cognition_tasks[0]["output_paths"], [str(paths["cognition"].resolve())])
             self.assertEqual(cognition_tasks[0]["allowed_write_paths"], cognition_tasks[0]["output_paths"])
 
@@ -444,10 +446,16 @@ class ReportQualityGateTests(unittest.TestCase):
             self.assertIn("not this report-revision task id", report_revision_tasks[0]["done_condition"])
             self.assertIn(str(paths["provenance"].resolve()), report_revision_tasks[0]["allowed_write_paths"])
             self.assertTrue(report_revision_tasks[0]["requires_subagent"])
+            self.assertTrue(report_revision_tasks[0]["prompt_contract"]["requires_subagent"])
 
             grounding_revision_tasks = read_json(out / "agent_grounding_revision_tasks.json")
             self.assertEqual(grounding_revision_tasks[0]["stage"], "grounding_revision")
             self.assertEqual(grounding_revision_tasks[0]["output_paths"], [str(paths["grounding"].resolve())])
+            execution_plan = read_json(out / "agent_execution_plan.json")
+            self.assertEqual(
+                [group["stage"] for group in execution_plan["repair_worker_groups"]],
+                ["slide_cognition_revision", "qa_revision", "report_revision", "grounding_revision"],
+            )
 
     def test_report_revision_task_infers_provenance_path_for_legacy_manifest(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -680,6 +688,28 @@ class ReportQualityGateTests(unittest.TestCase):
             self.assertIn("scaffolding", quality["reports"][0]["quality_issue_classes"])
             self.assertTrue(any("audit scaffolding" in error for error in quality["reports"][0]["errors"]))
 
+    def test_report_quality_classifies_qa_usage_separately(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            paths = make_agent_quality_run(out)
+            write_good_agent_outputs(paths)
+            paths["report"].write_text(
+                "# Talk One\n\n"
+                "## 摘要\n\n这场 talk 讨论 train-before-test 的比较协议。\n\n"
+                "## 核心 Findings / Experiments / Insights\n\n- Identical preparation before testing makes language model rankings more comparable.\n\n"
+                "## 逐页 PPT 解读\n\n### 第 1 张 PPT (00:00:00.000 - 00:00:30.000)\n\n"
+                "![slide](../talks/talk_one/slides/slide.png)\n\n"
+                "这页提出 train-before-test，并说明 identical preparation before testing makes language model rankings more comparable。\n\n"
+                "## QA\n\n未检测到可靠问答。\n",
+                encoding="utf-8",
+            )
+
+            result = validate_run(out, phase="report-quality")
+
+            self.assertFalse(result["ok"])
+            quality = read_json(out / "report_quality_validation.json")
+            self.assertIn("qa_usage", quality["reports"][0]["quality_issue_classes"])
+
     def test_report_quality_rejects_repeated_slide_index_lines(self):
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp)
@@ -887,6 +917,9 @@ class ReportQualityGateTests(unittest.TestCase):
             repair_plan = read_json(out / "agent_quality_repair_plan.json")
             self.assertTrue(repair_plan["resolved"])
             self.assertIsNone(repair_plan["blocked_gate"])
+            self.assertEqual(repair_plan["failed_reports"], [])
+            self.assertEqual(repair_plan["active_stages"], [])
+            self.assertIn("historical_failed_reports", repair_plan)
 
 
 if __name__ == "__main__":

@@ -25,16 +25,21 @@ GATE_MESSAGES = {
     },
     "report_agent": {
         "label": "agent report writing",
-        "validate_phase": "final",
+        "validate_phase": "agent-tasks",
         "task_manifests": [
+            "agent_execution_plan.json",
             "agent_report_dispatch_plan.json",
+            "agent_dependency_status.json",
             "agent_slide_cognition_tasks.json",
             "agent_qa_tasks.json",
             "agent_report_tasks.json",
             "agent_grounding_tasks.json",
         ],
         "instructions": [
-            "按 slide_cognition、qa_detection、report_write、grounding_review 顺序执行 task manifests。",
+            "先读取 agent_execution_plan.json 和 agent_report_dispatch_plan.json。",
+            "父 agent 可顺序执行 slide_cognition、qa_detection；用户允许并行时才按 talk 开 dependency worker。",
+            "完成或修复 dependency 输出后运行 validate --phase agent-tasks 刷新 agent_dependency_status.json。",
+            "只有 dependencies_ready: true 的 report task 可以进入 report_write。",
             "report_write 必须为每个 report task 启动独立 subagent；父 agent 不要在自己的上下文里代写最终报告。",
             "每个任务只写 allowed_write_paths 中列出的文件。",
             "完成后运行 validate --phase final。",
@@ -68,7 +73,7 @@ GATE_MESSAGES = {
         ],
         "instructions": [
             "读取 agent_quality_repair_plan.json。",
-            "按 slide_cognition_revision、qa_revision、report_revision、grounding_revision 顺序完成 task manifests。",
+            "只执行 active_stages 中列出的 repair task manifests，顺序为 upstream cognition/QA、report_revision、grounding_revision。",
             "每个任务只写 allowed_write_paths 中列出的文件。",
             "完成后运行 validate --phase final。",
             "验证通过后运行 resume。",
@@ -164,6 +169,22 @@ def format_state_for_human(state: dict[str, Any] | None) -> str:
     task_manifests = state.get("task_manifests") or []
     if state.get("failed_report_count") is not None:
         lines.append(f"Failed reports: {state['failed_report_count']}")
+    if state.get("agent_execution_plan"):
+        lines.append(f"Agent execution plan: {state['agent_execution_plan']}")
+    if state.get("dependency_validation_state"):
+        lines.append(f"Dependency validation: {state['dependency_validation_state']}")
+    if state.get("ready_report_tasks") is not None:
+        total = state.get("total_report_tasks")
+        suffix = f"/{total}" if total is not None else ""
+        lines.append(f"Ready report tasks: {state['ready_report_tasks']}{suffix}")
+    if state.get("missing_dependency_outputs") is not None:
+        lines.append(f"Missing dependency outputs: {state['missing_dependency_outputs']}")
+    if state.get("invalid_dependency_outputs") is not None:
+        lines.append(f"Invalid dependency outputs: {state['invalid_dependency_outputs']}")
+    if state.get("active_repair_stages"):
+        lines.append(f"Active repair stages: {', '.join(str(item) for item in state['active_repair_stages'])}")
+    if state.get("repair_plan_resolved"):
+        lines.append("Repair plan: resolved")
     if task_manifests:
         lines.append("Task manifests:")
         lines.extend(f"- {item}" for item in task_manifests)
@@ -183,7 +204,8 @@ def format_state_for_human(state: dict[str, Any] | None) -> str:
                     continue
                 slug = item.get("slug") or item.get("task_id")
                 provenance = item.get("execution_provenance_path") or ""
-                lines.append(f"- {slug}: {provenance}")
+                ready = "ready" if item.get("dependencies_ready") else "blocked"
+                lines.append(f"- {slug} [{ready}]: {provenance}")
         fallback_options = state.get("fallback_options") or []
         if fallback_options:
             lines.append("Fallback options:")
@@ -194,6 +216,8 @@ def format_state_for_human(state: dict[str, Any] | None) -> str:
                     lines.append(f"- {item}")
     if state.get("human_message"):
         lines.append(str(state["human_message"]))
+    if state.get("dispatch_guidance"):
+        lines.append(str(state["dispatch_guidance"]))
     if state.get("next_allowed_command"):
         lines.append(f"Next: {state['next_allowed_command']}")
     if state.get("resume_command"):

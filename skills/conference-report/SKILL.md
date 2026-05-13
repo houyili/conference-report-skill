@@ -96,19 +96,28 @@ When the CLI stops at the `report_agent` gate, first validate the generated task
 
 Then read the task manifests from the run directory:
 
+- `agent_execution_plan.json`
+- `agent_dependency_status.json` (appears after `validate --phase agent-tasks`)
 - `agent_slide_cognition_tasks.json`
 - `agent_qa_tasks.json`
 - `agent_report_dispatch_plan.json`
 - `agent_report_tasks.json`
 - `agent_grounding_tasks.json`
 
-The agent host does not decide the workflow. Execute tasks in this order: `slide_cognition`, `qa_detection`, dependency validation, `report_write`, then `grounding_review`, then `report-quality` validation, then revision if needed. Read `agent_report_dispatch_plan.json` before `report_write`: it maps each report task to exactly one clean report-writing subagent and records `dependency_validation_phase`, expected dependency counts, and ready/not-ready status. Do not dispatch a report writer until its declared slide cognition and QA dependency outputs exist and the current agent-tasks validation passes. Re-run `validate --phase agent-tasks` after writing slide cognition and QA outputs; this phase validates any existing dependency JSON and refreshes `agent_report_dispatch_plan.json` plus `agent_dependency_status.json` with current readiness. If a worker item still has `dependencies_ready: false`, do not start that report writer.
+The agent host does not decide the workflow. Execute tasks in this order: `slide_cognition`, `qa_detection`, dependency validation, `report_write`, then `grounding_review`, then `report-quality` validation, then revision if needed. Read `agent_execution_plan.json` first: it explains the minimum-subagent path, the parallel path, required report subagents, optional dependency/grounding groups, active repair groups, and current readiness. Read `agent_report_dispatch_plan.json` before `report_write`: it maps each report task to exactly one clean report-writing subagent and records `dependency_validation_phase`, `dependency_validation_state`, expected dependency counts, and ready/not-ready status. Do not dispatch a report writer until its declared slide cognition and QA dependency outputs exist and the current agent-tasks validation passes. Re-run `validate --phase agent-tasks` after writing slide cognition and QA outputs; this phase validates any existing dependency JSON and refreshes `agent_report_dispatch_plan.json` plus `agent_dependency_status.json` with current readiness. If a worker item still has `dependencies_ready: false`, do not start that report writer.
 
 If the host supports subagents but requires explicit user approval, ask before dispatching them. At this gate, slide cognition, QA detection, and grounding review may be completed sequentially in the parent context when needed, but report_write cannot be completed sequentially in parent context. Final report writing must produce `worker_type: subagent` provenance, so a parent-written report will fail `validate --phase final`. If the host has no subagent capability or the user does not authorize it, stop at the gate or switch to `--writer evidence` / `--writer openai`; do not pretend the output is an agent-written final report. Do not skip a stage and do not edit any task manifest.
+
+Subagent budgeting:
+
+- **minimum-subagent path**: complete `slide_cognition`, `qa_detection`, and `grounding_review` sequentially in the parent context; start exactly one clean `report_write` subagent for each `agent_report_tasks.json` item.
+- **parallel path**: only when the user explicitly allows parallel agents, use at most one optional dependency worker per talk, then one required report writer per report, then optional grounding/repair workers only for active failed tasks.
+- The reason multiple subagents may appear is intentional isolation: `N` final reports require `N` report-writing subagents. Extra dependency, grounding, or repair workers are optional throughput choices, not correctness requirements.
 
 Every task is self-contained. Give the worker only the JSON task object and its listed files:
 
 - `task_id` and `stage`: identity and workflow stage
+- `prompt_contract` or `worker_prompt_contract`: agent-neutral scope, absolute-path rule, and write-limit rule
 - `input_paths`: existing files/directories to read
 - `dependency_output_paths`: prior task outputs that must already exist before this task runs
 - `intermediate_output_paths`: required intermediate artifacts such as `talk_synthesis.md`
@@ -147,6 +156,8 @@ After each stage, the parent agent may rerun the task validation phase. After al
 
 If `--phase final` fails quality checks, the CLI writes `report_quality_validation.json`, creates `agent_quality_repair_plan.json`, and blocks at the `report_quality_repair` gate. Follow validate → revise → resume: read the repair plan, complete the listed manifests in this exact order, rerun `validate --phase final`, then run `resume`.
 
+`report_quality_validation.json` classifies issues with stable `quality_issue_classes`: `dependency`, `coverage`, `qa_usage`, `style`, `scaffolding`, `grounding`, `provenance`, and `synthesis`. Use those classes to decide which active repair tasks to run; do not infer a broader rewrite from a single issue.
+
 ```text
 slide_cognition_revision -> qa_revision -> report_revision -> grounding_revision
 ```
@@ -158,9 +169,9 @@ Repair manifests may include:
 - `agent_report_revision_tasks.json`: rewrite only failed Markdown reports after cognition and QA are fixed.
 - `agent_grounding_revision_tasks.json`: rewrite claim-level grounding reviews after reports are fixed.
 
-Do not only rewrite the report if `agent_quality_repair_plan.json` lists upstream cognition or QA revision tasks. Old completed runs can also be audited with `validate --phase final`; if quality fails, the CLI will write the same repair plan and move `pipeline_state.json` back to a waiting `report_quality_repair` gate.
+Do not only rewrite the report if `agent_quality_repair_plan.json` lists upstream cognition or QA revision tasks. Execute only `active_stages` and `active_repair_task_counts`; empty repair manifests are not active work. Old completed runs can also be audited with `validate --phase final`; if quality fails, the CLI will write the same repair plan and move `pipeline_state.json` back to a waiting `report_quality_repair` gate.
 
-If `--phase final` fails for any reason, do not claim final reports are complete. Read `validation.json`, `agent_task_validation.json`, and `report_quality_validation.json` when present; fix only the failed task outputs permitted by `allowed_write_paths`, and rerun final validation. When report-quality later passes, an old `agent_quality_repair_plan.json` may be marked `resolved` or `superseded_by` instead of being deleted.
+If `--phase final` fails for any reason, do not claim final reports are complete. Read `validation.json`, `agent_task_validation.json`, and `report_quality_validation.json` when present; fix only the failed task outputs permitted by `allowed_write_paths`, and rerun final validation. When report-quality later passes, an old `agent_quality_repair_plan.json` is marked `resolved`, moves active failures out of `failed_reports`, and may keep `historical_failed_reports` for audit instead of being deleted.
 
 ## Pipeline
 
@@ -191,6 +202,7 @@ Each run directory should contain:
 - `segmentation/review.html`: segmentation review
 - `talks/<talk_slug>/`: one material bundle per reportable talk
 - `talks/<talk_slug>/evidence.json`: OCR plus ASR evidence per reportable slide
+- `talks/<talk_slug>/skipped_slides.json`: traceable skipped/evidence-only slides with original slide identity, time, image, role, and skip reason
 - `talks/<talk_slug>/slide_cognition/*.json`: persistent agent/VLM cognition for each slide task
 - `talks/<talk_slug>/qa/qa_pairs.json`: persistent QA pair detection output
 - `talks/<talk_slug>/talk_synthesis.md`: report-writer synthesis of the whole talk before final drafting
@@ -198,6 +210,7 @@ Each run directory should contain:
 - `talks/<talk_slug>/report_writer_prompt.md`: writer instructions
 - `agent_slide_cognition_tasks.json`: one bounded cognition task per evidence slide when `--writer agent` is used
 - `agent_qa_tasks.json`: one bounded QA detection task per reportable talk/topic
+- `agent_execution_plan.json`: machine-readable orchestration plan with minimum/parallel paths, required report subagents, dependency readiness, and active repair groups
 - `agent_report_dispatch_plan.json`: one worker item per final report-writing subagent, plus authorization, dependency readiness, and fallback guidance
 - `agent_dependency_status.json`: refreshed readiness summary after `validate --phase agent-tasks`, including missing or invalid report-writing dependencies
 - `agent_report_tasks.json`: one bounded report-writing task per reportable talk/topic

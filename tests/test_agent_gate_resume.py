@@ -296,13 +296,14 @@ class AgentGateResumeTests(unittest.TestCase):
             self.assertIn("config_path", state)
             self.assertIn("agent_report_tasks.json", state["task_manifests"])
             self.assertIn("agent_report_dispatch_plan.json", state["task_manifests"])
+            self.assertIn("agent_execution_plan.json", state["task_manifests"])
             self.assertTrue(state["requires_subagents"])
             self.assertEqual(state["required_report_subagents"], 0)
             self.assertEqual(state["subagent_required_stage"], "report_write")
             self.assertIn("请用户明确授权为每个 report task 启动独立 subagent", state["authorization_message"])
             self.assertIn("fallback_options", state)
             self.assertIn("--config", state["next_allowed_command"])
-            self.assertIn("--phase final", state["next_allowed_command"])
+            self.assertIn("--phase agent-tasks", state["next_allowed_command"])
 
     def test_status_outputs_current_gate_and_next_command(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -361,6 +362,7 @@ class AgentGateResumeTests(unittest.TestCase):
             self.assertIn("Subagent stage: report_write", text)
             self.assertIn("Authorization:", text)
             self.assertIn("Pending report subagents:", text)
+            self.assertIn("[blocked]", text)
             self.assertIn("talk-one", text)
             self.assertIn("report_writer_provenance.json", text)
             self.assertIn("Fallback options:", text)

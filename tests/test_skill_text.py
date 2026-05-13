@@ -29,6 +29,7 @@ class ConferenceReportSkillTextTests(unittest.TestCase):
         self.assertIn("--writer agent", text)
         self.assertIn("one subagent per", text.lower())
         self.assertIn("agent_report_tasks.json", text)
+        self.assertIn("agent_execution_plan.json", text)
         self.assertIn("does not require an OpenAI API key", text)
 
     def test_skill_requires_task_manifests_write_limits_and_final_validation(self):
@@ -102,6 +103,7 @@ class ConferenceReportSkillTextTests(unittest.TestCase):
 
         self.assertIn("ask for subagent authorization before build/report gate", text)
         self.assertIn("agent_report_dispatch_plan.json", text)
+        self.assertIn("agent_execution_plan.json", text)
         self.assertIn("report_write cannot be completed sequentially in parent context", text)
         self.assertIn("slide cognition, QA detection, and grounding review may be completed sequentially", text)
 
@@ -113,9 +115,12 @@ class ConferenceReportSkillTextTests(unittest.TestCase):
         self.assertIn("dependency readiness", text)
         self.assertIn("agent-tasks validation passes", text)
         self.assertIn("agent_dependency_status.json", text)
+        self.assertIn("dependency_validation_state", text)
         self.assertIn("dependencies_ready: false", text)
         self.assertIn("Use absolute paths exactly as written in the manifests", text)
         self.assertIn("previous test directory", text)
+        self.assertIn("minimum-subagent path", text)
+        self.assertIn("parallel path", text)
 
     def test_skill_documents_talk_synthesis_and_reader_prose_contract(self):
         text = SKILL_PATH.read_text(encoding="utf-8")

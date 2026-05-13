@@ -260,8 +260,18 @@ class AgentTaskValidationTests(unittest.TestCase):
             initial = validate_run(out, phase="agent-tasks")
             self.assertTrue(initial["ok"], initial)
             initial_dispatch = read_json(out / "agent_report_dispatch_plan.json")
+            self.assertEqual(initial_dispatch["dependency_validation_state"], "validated")
             self.assertFalse(initial_dispatch["workers"][0]["dependencies_ready"])
             self.assertEqual(initial_dispatch["workers"][0]["dependency_status"]["missing"], 2)
+            initial_dependency = read_json(out / "agent_dependency_status.json")
+            self.assertEqual(initial_dependency["dependency_validation_state"], "validated")
+            self.assertEqual(initial_dependency["ready_report_tasks"], 0)
+            self.assertEqual(initial_dependency["missing_dependency_outputs"], 2)
+            execution_plan = read_json(out / "agent_execution_plan.json")
+            self.assertEqual(execution_plan["dependency_validation_state"], "validated")
+            self.assertEqual(execution_plan["current_status"]["missing_dependency_outputs"], 2)
+            self.assertEqual(execution_plan["subagent_budget"]["minimum_required"], 1)
+            self.assertEqual(len(execution_plan["dependency_worker_groups"]), 1)
 
             self.write_dependency_outputs(out, valid_cognition=False)
             invalid = validate_run(out, phase="agent-tasks")
@@ -280,6 +290,9 @@ class AgentTaskValidationTests(unittest.TestCase):
             self.assertEqual(dispatch["workers"][0]["dependency_status"]["existing"], 2)
             self.assertEqual(dispatch["workers"][0]["dependency_status"]["missing"], 0)
             self.assertTrue(read_json(out / "agent_dependency_status.json")["ok"])
+            ready_plan = read_json(out / "agent_execution_plan.json")
+            self.assertEqual(ready_plan["current_status"]["ready_report_tasks"], 1)
+            self.assertTrue(ready_plan["report_worker_groups"][0]["dependencies_ready"])
 
     def test_final_validation_rejects_report_missing_required_section(self):
         with tempfile.TemporaryDirectory() as tmp:

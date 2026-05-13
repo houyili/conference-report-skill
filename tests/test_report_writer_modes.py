@@ -81,6 +81,8 @@ class ReportWriterModeTests(unittest.TestCase):
             self.assertTrue(all("QA" in item["required_sections"] for item in tasks))
             self.assertTrue(all("validation_rules" in item for item in tasks))
             self.assertTrue(all("subagent_contract" in item for item in tasks))
+            self.assertTrue(all(item["prompt_contract"]["requires_subagent"] is True for item in tasks))
+            self.assertTrue(all("absolute paths" in item["prompt_contract"]["path_rule"] for item in tasks))
             self.assertTrue(all(item["requires_subagent"] is True for item in tasks))
             self.assertTrue(all(item["required_provenance"]["worker_type"] == "subagent" for item in tasks))
             self.assertTrue(all(item["required_provenance"]["isolation_scope"] == "single_report" for item in tasks))
@@ -103,6 +105,7 @@ class ReportWriterModeTests(unittest.TestCase):
             self.assertEqual(sorted(manifest["pending_reports"]), sorted(item["report_path"] for item in tasks))
             self.assertEqual(manifest["task_manifests"]["report_write"], str((out / "agent_report_tasks.json").resolve()))
             self.assertEqual(manifest["task_manifests"]["report_dispatch"], str((out / "agent_report_dispatch_plan.json").resolve()))
+            self.assertEqual(manifest["task_manifests"]["agent_execution_plan"], str((out / "agent_execution_plan.json").resolve()))
             self.assertIn("slide_cognition", manifest["task_manifests"])
             self.assertIn("qa_detection", manifest["task_manifests"])
             self.assertIn("grounding_review", manifest["task_manifests"])
@@ -110,6 +113,7 @@ class ReportWriterModeTests(unittest.TestCase):
             dispatch = read_json(out / "agent_report_dispatch_plan.json")
             self.assertTrue(dispatch["requires_subagents"])
             self.assertEqual(dispatch["required_report_subagents"], 2)
+            self.assertEqual(dispatch["dependency_validation_state"], "unvalidated")
             self.assertEqual(dispatch["subagent_required_stage"], "report_write")
             self.assertIn("请用户明确授权为每个 report task 启动独立 subagent", dispatch["authorization_message"])
             self.assertEqual(len(dispatch["workers"]), 2)
@@ -125,6 +129,11 @@ class ReportWriterModeTests(unittest.TestCase):
             self.assertTrue(all(worker["execution_provenance_path"] in worker["allowed_write_paths"] for worker in dispatch["workers"]))
             self.assertIn("evidence", {item["writer"] for item in dispatch["fallback_options"]})
             self.assertIn("openai", {item["writer"] for item in dispatch["fallback_options"]})
+            execution_plan = read_json(out / "agent_execution_plan.json")
+            self.assertEqual(execution_plan["dependency_validation_state"], "unvalidated")
+            self.assertEqual(execution_plan["required_report_subagents"], 2)
+            self.assertEqual(execution_plan["subagent_budget"]["optional_dependency_worker_groups"], 2)
+            self.assertEqual(len(execution_plan["report_worker_groups"]), 2)
 
     def test_agent_writer_evidence_separates_local_and_original_slide_indices_after_skips(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -169,10 +178,14 @@ class ReportWriterModeTests(unittest.TestCase):
                 generate_reports(out, make_cfg(), writer="agent")
 
             evidence = read_json(talk_dir / "evidence.json")
+            skipped = read_json(talk_dir / "skipped_slides.json")
             self.assertEqual(len(evidence), 1)
             self.assertEqual(evidence[0]["local_evidence_index"], "1")
             self.assertEqual(evidence[0]["original_slide_index"], "2")
             self.assertEqual(evidence[0]["slide_index"], "2")
+            self.assertEqual(skipped[0]["original_slide_index"], "1")
+            self.assertTrue(skipped[0]["evidence_only"])
+            self.assertIn("role", skipped[0])
 
     def test_openai_writer_requires_key_before_calling_openai(self):
         with tempfile.TemporaryDirectory() as tmp:
