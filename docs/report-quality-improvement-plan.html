@@ -1,0 +1,597 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>报告质量改进方案审批页</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f3f6f8;
+      --paper: #ffffff;
+      --ink: #17202a;
+      --muted: #647383;
+      --line: #dce3ea;
+      --blue: #176b87;
+      --green: #4f7d5a;
+      --amber: #b7641d;
+      --red: #b14d4d;
+      --violet: #6f5c99;
+      --soft-blue: #eaf5f8;
+      --soft-green: #ecf7ef;
+      --soft-amber: #fff3e6;
+      --soft-red: #fff0ef;
+      --soft-violet: #f2eff9;
+      --code: #eef3f6;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+    main {
+      width: min(1180px, calc(100vw - 32px));
+      margin: 28px auto 52px;
+    }
+    .hero {
+      min-height: 360px;
+      display: grid;
+      grid-template-columns: minmax(0, 1.15fr) minmax(320px, 0.85fr);
+      gap: 28px;
+      align-items: stretch;
+      padding: 34px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background:
+        linear-gradient(rgba(255,255,255,0.92), rgba(255,255,255,0.86)),
+        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='1200' height='720' viewBox='0 0 1200 720'%3E%3Crect width='1200' height='720' fill='%23e7eef3'/%3E%3Cg fill='none' stroke='%239ab8c4' stroke-width='2' opacity='.55'%3E%3Cpath d='M90 140h320v190H90zM460 140h320v190H460zM830 140h280v190H830zM90 390h440v190H90zM580 390h530v190H580z'/%3E%3Cpath d='M130 188h210M130 226h160M500 188h230M500 226h150M870 188h180M870 226h130M130 438h340M130 476h260M620 438h410M620 476h330M620 514h220'/%3E%3C/g%3E%3Ccircle cx='996' cy='92' r='42' fill='%23d8e8ee'/%3E%3C/svg%3E");
+      background-size: cover;
+      box-shadow: 0 18px 42px rgba(28, 43, 55, 0.08);
+    }
+    h1 {
+      margin: 0 0 14px;
+      max-width: 780px;
+      font-size: clamp(34px, 5vw, 56px);
+      line-height: 1.08;
+      letter-spacing: 0;
+    }
+    .lead {
+      max-width: 740px;
+      margin: 0;
+      color: #35485a;
+      font-size: 20px;
+    }
+    .hero-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 24px;
+    }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      min-height: 30px;
+      padding: 4px 11px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: #fff;
+      color: var(--muted);
+      font-size: 14px;
+    }
+    .verdict {
+      display: grid;
+      align-content: center;
+      gap: 14px;
+      padding: 24px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.9);
+    }
+    .score {
+      display: grid;
+      grid-template-columns: 86px 1fr;
+      gap: 14px;
+      align-items: center;
+    }
+    .score strong {
+      display: grid;
+      place-items: center;
+      width: 86px;
+      height: 86px;
+      border-radius: 50%;
+      background: var(--soft-green);
+      color: var(--green);
+      font-size: 30px;
+    }
+    .score h2 {
+      margin: 0 0 4px;
+      font-size: 22px;
+      letter-spacing: 0;
+    }
+    .score p { margin: 0; color: var(--muted); }
+    section {
+      margin-top: 24px;
+      padding: 26px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--paper);
+    }
+    .section-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      margin-bottom: 18px;
+    }
+    .section-title h2 {
+      margin: 0;
+      font-size: 27px;
+      letter-spacing: 0;
+    }
+    .section-title p {
+      max-width: 540px;
+      margin: 0;
+      color: var(--muted);
+      text-align: right;
+    }
+    .grid-2, .grid-3 {
+      display: grid;
+      gap: 16px;
+    }
+    .grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .card {
+      min-height: 132px;
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fbfcfd;
+    }
+    .card h3 {
+      margin: 0 0 8px;
+      font-size: 18px;
+      letter-spacing: 0;
+    }
+    .card p {
+      margin: 0;
+      color: var(--muted);
+    }
+    .ok { background: var(--soft-green); border-color: #cfe6d4; }
+    .risk { background: var(--soft-red); border-color: #f0d1cf; }
+    .why { background: var(--soft-blue); border-color: #cfe4eb; }
+    .p0 { background: var(--soft-red); border-color: #efcfcc; }
+    .p1 { background: var(--soft-amber); border-color: #efd6ba; }
+    .p2 { background: var(--soft-violet); border-color: #ded6ee; }
+    .tag {
+      display: inline-block;
+      margin-bottom: 10px;
+      padding: 3px 8px;
+      border-radius: 4px;
+      color: #fff;
+      font-weight: 700;
+      font-size: 13px;
+    }
+    .tag.green { background: var(--green); }
+    .tag.red { background: var(--red); }
+    .tag.blue { background: var(--blue); }
+    .tag.amber { background: var(--amber); }
+    .tag.violet { background: var(--violet); }
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 12px;
+      align-items: stretch;
+    }
+    .step {
+      position: relative;
+      min-height: 118px;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fbfcfd;
+    }
+    .step b {
+      display: block;
+      margin-bottom: 8px;
+      color: var(--blue);
+      font-size: 18px;
+    }
+    .step span {
+      color: var(--muted);
+      font-size: 14px;
+    }
+    .step:not(:last-child)::after {
+      content: "→";
+      position: absolute;
+      right: -11px;
+      top: 42%;
+      color: var(--muted);
+      font-size: 20px;
+      z-index: 2;
+    }
+    .compare {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 18px;
+      align-items: stretch;
+    }
+    .quote {
+      padding: 18px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: #fbfcfd;
+    }
+    .quote h3 { margin-top: 0; }
+    code {
+      padding: 2px 5px;
+      border-radius: 4px;
+      background: var(--code);
+      color: #25485b;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.92em;
+    }
+    ul {
+      margin: 0;
+      padding-left: 1.1em;
+    }
+    li { margin: 7px 0; }
+    .footer {
+      margin-top: 20px;
+      color: var(--muted);
+      text-align: center;
+      font-size: 14px;
+    }
+    @media (max-width: 920px) {
+      main { width: min(100vw - 16px, 1180px); margin-top: 8px; }
+      .hero, .grid-2, .grid-3, .compare, .flow {
+        grid-template-columns: 1fr;
+      }
+      .hero { padding: 24px; }
+      .section-title {
+        display: block;
+      }
+      .section-title p {
+        margin-top: 8px;
+        text-align: left;
+      }
+      .step:not(:last-child)::after {
+        content: "↓";
+        right: 18px;
+        top: auto;
+        bottom: -18px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header class="hero">
+      <div>
+        <h1>报告质量改进方案审批页</h1>
+        <p class="lead">这次安装版 skill 端到端测试已经跑通；下一步要解决的是报告像“验收表”，而不是像真正理解了整场 talk 的研究解读。</p>
+        <div class="hero-meta">
+          <span class="pill">测试对象：installed conference-report skill</span>
+          <span class="pill">样例：session-10012011-installed-skill-test</span>
+          <span class="pill">范围：设计审批，不改 pipeline 代码</span>
+        </div>
+      </div>
+      <aside class="verdict">
+        <div class="score">
+          <strong>OK</strong>
+          <div>
+            <h2>流程已经成立</h2>
+            <p>登录、ingest、agent gate、subagent provenance、final validation 都通过。</p>
+          </div>
+        </div>
+        <div class="score">
+          <strong style="background: var(--soft-amber); color: var(--amber);">改</strong>
+          <div>
+            <h2>质量还要升级</h2>
+            <p>validator 能证明报告可信，但不能证明它好读、会解释。</p>
+          </div>
+        </div>
+      </aside>
+    </header>
+
+    <section>
+      <div class="section-title">
+        <h2>一页结论</h2>
+        <p>端到端测试成功，暴露的问题集中在“报告写作质量定义”上。</p>
+      </div>
+      <div class="grid-3">
+        <div class="card ok">
+          <span class="tag green">符合预期</span>
+          <h3>工程链路跑通</h3>
+          <p>安装版 CLI、登录态、fast profile、agent gate、repair gate、final validation 都完成。</p>
+        </div>
+        <div class="card risk">
+          <span class="tag red">不符合预期</span>
+          <h3>报告读感机械</h3>
+          <p>正文出现 <code>evidence.json</code>、<code>slide_index</code> 等审计脚手架。</p>
+        </div>
+        <div class="card why">
+          <span class="tag blue">根因</span>
+          <h3>验证压力泄漏到 prose</h3>
+          <p>writer 为了证明有证据，把本该留在 grounding 的信息写进正文。</p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-title">
+        <h2>流程复盘</h2>
+        <p>这条链路说明 agent-native 编排可以工作，问题不在“能不能完成”。</p>
+      </div>
+      <div class="flow">
+        <div class="step"><b>登录访问</b><span>授权浏览器登录态后，ICLR 门禁可越过。</span></div>
+        <div class="step"><b>快速采集</b><span><code>fast</code> profile 使用 metadata 与 subtitles。</span></div>
+        <div class="step"><b>材料生成</b><span>slides、ASR、dedupe、segment 都落盘。</span></div>
+        <div class="step"><b>Agent Gate</b><span>109 个 cognition、4 个 QA、4 个 writer。</span></div>
+        <div class="step"><b>Final OK</b><span>repair 后 final validation 无错误。</span></div>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-title">
+        <h2>好与坏</h2>
+        <p>左边证明架构方向正确，右边说明下一轮要改质量门槛。</p>
+      </div>
+      <div class="compare">
+        <div class="quote ok">
+          <h3>符合预期</h3>
+          <ul>
+            <li>没有退回开发目录或 <code>python -m</code> 路径。</li>
+            <li>已安装 skill 能解析 CLI 并完成 use-stage run。</li>
+            <li>subagent provenance 满足单报告隔离要求。</li>
+            <li>report-quality repair gate 能产生实际修复价值。</li>
+          </ul>
+        </div>
+        <div class="quote risk">
+          <h3>不符合预期</h3>
+          <ul>
+            <li>validator 通过，但人读起来仍像执行日志。</li>
+            <li>coverage 规则倒逼 <code>第 N 张</code> 这种标题格式。</li>
+            <li>低信息页、重复 Q&amp;A 页仍可能进入主报告。</li>
+            <li>grounding review 没有主动标出 prose style 问题。</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-title">
+        <h2>抽样审计新增发现</h2>
+        <p>已抽查 20 个 slide section，对照 evidence、cognition、report、grounding，并手动看了 4 张疑点截图。</p>
+      </div>
+      <div class="grid-3">
+        <div class="card ok">
+          <span class="tag green">内容层</span>
+          <h3>大体 grounded</h3>
+          <p>抽样页中，cognition 与 report 的核心 claim 通常一致，问题不是大规模幻觉。</p>
+        </div>
+        <div class="card risk">
+          <span class="tag red">正文层</span>
+          <h3>审计脚手架外露</h3>
+          <p>4 份报告分别出现 41 / 22 / 92 / 45 个 <code>slide_index</code> 或 evidence marker。</p>
+        </div>
+        <div class="card risk">
+          <span class="tag red">Review 层</span>
+          <h3>style issues 全部漏报</h3>
+          <p>4 个 grounding JSON 的 <code>template_or_style_issues</code> 都是空数组。</p>
+        </div>
+        <div class="card why">
+          <span class="tag blue">Identity</span>
+          <h3>slide 编号被混用</h3>
+          <p>本地 evidence 序号、原始 PPT slide_index、报告页序号不是一回事。</p>
+        </div>
+        <div class="card p1">
+          <span class="tag amber">边界页</span>
+          <h3>跨 talk / 过渡页进入正文</h3>
+          <p>Hubble 的第 1 个主报告 section 实际还是上一场 LLM DNA 结束页。</p>
+        </div>
+        <div class="card p2">
+          <span class="tag violet">中间层</span>
+          <h3>缺少 synthesis 承接</h3>
+          <p>cognition 有好信息，但没有沉淀成整场 talk 的论证地图。</p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-title">
+        <h2>为什么会刻板</h2>
+        <p>不是 writer 完全没理解，而是系统奖励了“逐页可验收”。</p>
+      </div>
+      <div class="grid-3">
+        <div class="card why">
+          <h3>Prompt 偏局部</h3>
+          <p>要求每页对齐 PPT + ASR，但没有强制先做整场 talk 的 argument map。</p>
+        </div>
+        <div class="card why">
+          <h3>Validator 偏结构</h3>
+          <p>能抓缺页、复制、没用 QA，却不会判断“这页如何推进论文”。</p>
+        </div>
+        <div class="card why">
+          <h3>证据锚点外露</h3>
+          <p>支撑信息应该在 grounding JSON 里，而不是变成正文第一句话。</p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-title">
+        <h2>系统编排改进视角</h2>
+        <p>这轮不只改文风，还要改 subagent 何时启动、如何接收反馈、哪些理解要沉淀。</p>
+      </div>
+      <div class="grid-2">
+        <div class="card why">
+          <span class="tag blue">Prompt 与时机</span>
+          <h3>report writer 先综合，后成稿</h3>
+          <p>writer 启动前必须等 cognition/QA 依赖验证通过；启动后先形成 talk-level synthesis，再写最终报告。</p>
+        </div>
+        <div class="card p0">
+          <span class="tag red">硬编排</span>
+          <h3>CLI 控制顺序，manifest 控制边界</h3>
+          <p>父 agent 只协调；是否 ready、能写哪里、下一步做什么，都由 <code>pipeline_state</code> 与 task manifest 决定。</p>
+        </div>
+        <div class="card p1">
+          <span class="tag amber">反馈闭环</span>
+          <h3>失败原因要可执行</h3>
+          <p>质量反馈拆成 support、coverage、style、scaffolding、synthesis，不只给一句“没过”。</p>
+        </div>
+        <div class="card p2">
+          <span class="tag violet">中间沉淀</span>
+          <h3>新增理解层 artifact</h3>
+          <p><code>talk_synthesis.md</code> 记录整场理解、slide role map、Q&amp;A 边界，让理解可审计但不污染正文。</p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-title">
+        <h2>改进优先级</h2>
+        <p>P0 先让报告好写、validator 不误导；P1/P2 再完善体验和状态。</p>
+      </div>
+      <div class="grid-3">
+        <div class="card p0">
+          <span class="tag red">P0</span>
+          <h3>改 writer contract</h3>
+          <p>先建立整体理解，再写逐页解释；禁止审计语言进入正文。</p>
+        </div>
+        <div class="card p0">
+          <span class="tag red">P0</span>
+          <h3>放宽 coverage parser</h3>
+          <p>同时接受 <code>第 N 张</code>、<code>Slide N</code>、<code>slide_index: N</code>。</p>
+        </div>
+        <div class="card p0">
+          <span class="tag red">P0</span>
+          <h3>拆清 slide identity</h3>
+          <p>区分本地 evidence 序号、原始 PPT 编号和报告展示序号。</p>
+        </div>
+        <div class="card p0">
+          <span class="tag red">P0</span>
+          <h3>依赖验证后再 dispatch</h3>
+          <p>report writer 不能只因文件存在就启动；cognition/QA 必须先过 gate。</p>
+        </div>
+        <div class="card p1">
+          <span class="tag amber">P1</span>
+          <h3>区分主报告与证据页</h3>
+          <p>低信息页和重复页保留可追溯性，但不强迫写成长段解读。</p>
+        </div>
+        <div class="card p1">
+          <span class="tag amber">P1</span>
+          <h3>新增 style-quality gate</h3>
+          <p>检测重复开头、显式证据脚手架、模板化段落。</p>
+        </div>
+        <div class="card p2">
+          <span class="tag violet">P2</span>
+          <h3>增加 talk synthesis</h3>
+          <p>新增 <code>talk_synthesis.md</code> 或 <code>argument_map.json</code>。</p>
+        </div>
+        <div class="card p2">
+          <span class="tag violet">P2</span>
+          <h3>修复 repair 状态表达</h3>
+          <p>final OK 后把历史 repair plan 标成 resolved 或 superseded。</p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-title">
+        <h2>怎么改</h2>
+        <p>三块核心代码方向，加一组针对性测试。</p>
+      </div>
+      <div class="grid-2">
+        <div class="card">
+          <h3><code>conference_report/report.py</code></h3>
+          <p>调整 writer prompt、report task quality contract、grounding review instructions。</p>
+        </div>
+        <div class="card">
+          <h3><code>conference_report/validate.py</code></h3>
+          <p>改 coverage parser，新增 audit-scaffold/style checks，失败时进入 report revision。</p>
+        </div>
+        <div class="card">
+          <h3>Dispatch 与反馈 artifact</h3>
+          <p>dispatch plan 写清依赖是否 ready；repair plan 写清失败类别与具体修复目标。</p>
+        </div>
+        <div class="card">
+          <h3>中间文件沉淀</h3>
+          <p>新增 <code>talk_synthesis.md</code>，承接 slide cognition 与最终报告之间的整体理解。</p>
+        </div>
+        <div class="card">
+          <h3>证据页处理</h3>
+          <p>让 skipped/evidence-only slides 保持可追溯；跨 talk 与 Q&amp;A 重复页不污染主报告叙事。</p>
+        </div>
+        <div class="card">
+          <h3>测试与验收</h3>
+          <p>覆盖 dispatch readiness、反馈分类、中间 synthesis、标题格式和 style issues。</p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-title">
+        <h2>实施更新</h2>
+        <p>第一轮已把 P0/P1 的核心约束落进代码、测试和 skill 文档。</p>
+      </div>
+      <div class="grid-3">
+        <div class="card ok">
+          <span class="tag green">已完成</span>
+          <h3>Writer task</h3>
+          <p>新增 <code>synthesis_path</code>、<code>intermediate_output_paths</code>、<code>slide_identity_contract</code>。</p>
+        </div>
+        <div class="card ok">
+          <span class="tag green">已完成</span>
+          <h3>Quality gate</h3>
+          <p>coverage 更宽容；审计脚手架、重复 <code>slide_index</code>、synthesis 缺失会失败。</p>
+        </div>
+        <div class="card ok">
+          <span class="tag green">已完成</span>
+          <h3>Dispatch</h3>
+          <p>worker item 公开依赖数量、ready 状态和 <code>agent-tasks</code> 验证阶段。</p>
+        </div>
+        <div class="card why">
+          <span class="tag blue">已发现</span>
+          <h3>Repair 写权限</h3>
+          <p>synthesis 失败时，repair task 也必须允许写 <code>talk_synthesis.md</code>。</p>
+        </div>
+        <div class="card ok">
+          <span class="tag green">已修正</span>
+          <h3>Repair manifest</h3>
+          <p>把 synthesis 放进 <code>intermediate_output_paths</code> 和 <code>allowed_write_paths</code>。</p>
+        </div>
+        <div class="card p1">
+          <span class="tag amber">后续</span>
+          <h3>Evidence-only</h3>
+          <p>跨 talk、Q&amp;A 重复页的自动标注仍可继续增强。</p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-title">
+        <h2>审批关注点</h2>
+        <p>这份 HTML 是审批摘要；详细文字版在 Markdown 文档中。</p>
+      </div>
+      <div class="grid-3">
+        <div class="card ok">
+          <h3>保留</h3>
+          <p>agent-native invariant：最终报告仍由独立 report-writing subagent 写。</p>
+        </div>
+        <div class="card why">
+          <h3>改变</h3>
+          <p>质量标准从“结构可验”升级为“读者能理解整篇工作”。</p>
+        </div>
+        <div class="card p1">
+          <h3>验收</h3>
+          <p>旧报告应被解释为“结构过关，但风格需要 repair”。</p>
+        </div>
+      </div>
+    </section>
+
+    <p class="footer">详细设计文档：<code>docs/report-quality-improvement-plan.md</code></p>
+  </main>
+</body>
+</html>
