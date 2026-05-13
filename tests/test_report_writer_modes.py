@@ -72,7 +72,11 @@ class ReportWriterModeTests(unittest.TestCase):
             self.assertTrue(all(item["output_paths"] == [item["report_path"]] for item in tasks))
             self.assertTrue(all("execution_provenance_path" in item for item in tasks))
             self.assertTrue(all(item["report_path"] in item["allowed_write_paths"] for item in tasks))
+            self.assertTrue(all("synthesis_path" in item for item in tasks))
+            self.assertTrue(all(item["synthesis_path"] in item["allowed_write_paths"] for item in tasks))
+            self.assertTrue(all(item["intermediate_output_paths"] == [item["synthesis_path"]] for item in tasks))
             self.assertTrue(all(item["execution_provenance_path"] in item["allowed_write_paths"] for item in tasks))
+            self.assertTrue(all("slide_identity_contract" in item for item in tasks))
             self.assertTrue(all("摘要" in item["required_sections"] for item in tasks))
             self.assertTrue(all("QA" in item["required_sections"] for item in tasks))
             self.assertTrue(all("validation_rules" in item for item in tasks))
@@ -85,6 +89,7 @@ class ReportWriterModeTests(unittest.TestCase):
                 contract_text = "\n".join(task["subagent_contract"] + task["quality_contract"])
                 self.assertIn("one clean subagent context per report", contract_text)
                 self.assertIn("topic-level understanding before writing", contract_text)
+                self.assertIn("talk_synthesis.md", contract_text)
                 self.assertIn("OCR, ASR, and screenshots are evidence for understanding", contract_text)
             self.assertEqual([str(path.resolve()) for path in report_paths], [item["report_path"] for item in tasks])
 
@@ -112,9 +117,62 @@ class ReportWriterModeTests(unittest.TestCase):
             self.assertTrue(all(worker["worker_type"] == "subagent" for worker in dispatch["workers"]))
             self.assertTrue(all(worker["isolation_scope"] == "single_report" for worker in dispatch["workers"]))
             self.assertTrue(all(worker["task"]["task_id"].startswith("report:") for worker in dispatch["workers"]))
+            self.assertTrue(all(worker["dependency_validation_phase"] == "agent-tasks" for worker in dispatch["workers"]))
+            self.assertTrue(all(worker["expected_dependency_count"] == len(worker["dependency_output_paths"]) for worker in dispatch["workers"]))
+            self.assertTrue(all(worker["dependency_status"]["missing"] == worker["expected_dependency_count"] for worker in dispatch["workers"]))
+            self.assertTrue(all(worker["dependencies_ready"] is False for worker in dispatch["workers"]))
+            self.assertTrue(all(worker["intermediate_output_paths"] == worker["task"]["intermediate_output_paths"] for worker in dispatch["workers"]))
             self.assertTrue(all(worker["execution_provenance_path"] in worker["allowed_write_paths"] for worker in dispatch["workers"]))
             self.assertIn("evidence", {item["writer"] for item in dispatch["fallback_options"]})
             self.assertIn("openai", {item["writer"] for item in dispatch["fallback_options"]})
+
+    def test_agent_writer_evidence_separates_local_and_original_slide_indices_after_skips(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            talk_dir = make_talk(out, "talk_one", "Talk One")
+            slide2 = talk_dir / "slides" / "slide2.png"
+            slide2.write_bytes(b"not-a-real-png")
+            write_json(
+                talk_dir / "slide_intervals.json",
+                [
+                    {
+                        "representative_path": str((talk_dir / "slides" / "slide.png").resolve()),
+                        "talk_slide_path": str((talk_dir / "slides" / "slide.png").resolve()),
+                        "start_time": "00:00:00.000",
+                        "end_time": "00:00:10.000",
+                        "start_seconds": 0.0,
+                        "end_seconds": 10.0,
+                    },
+                    {
+                        "representative_path": str(slide2.resolve()),
+                        "talk_slide_path": str(slide2.resolve()),
+                        "start_time": "00:00:10.000",
+                        "end_time": "00:00:20.000",
+                        "start_seconds": 10.0,
+                        "end_seconds": 20.0,
+                    },
+                ],
+            )
+            (talk_dir / "timeline.txt").write_text(
+                "[00:00:01.000] Our last paper will be presented by Ada.\n"
+                "[00:00:11.000] This slide explains the method.\n",
+                encoding="utf-8",
+            )
+
+            with mock.patch(
+                "conference_report.report.ocr_slide_text",
+                side_effect=[
+                    "ICLR",
+                    "Method slide with benchmark ranking protocol, evaluation setup, and training details",
+                ],
+            ):
+                generate_reports(out, make_cfg(), writer="agent")
+
+            evidence = read_json(talk_dir / "evidence.json")
+            self.assertEqual(len(evidence), 1)
+            self.assertEqual(evidence[0]["local_evidence_index"], "1")
+            self.assertEqual(evidence[0]["original_slide_index"], "2")
+            self.assertEqual(evidence[0]["slide_index"], "2")
 
     def test_openai_writer_requires_key_before_calling_openai(self):
         with tempfile.TemporaryDirectory() as tmp:

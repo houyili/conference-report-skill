@@ -102,13 +102,16 @@ Then read the task manifests from the run directory:
 - `agent_report_tasks.json`
 - `agent_grounding_tasks.json`
 
-The agent host does not decide the workflow. Execute tasks in this order: `slide_cognition`, `qa_detection`, `report_write`, then `grounding_review`, then `report-quality` validation, then revision if needed. Read `agent_report_dispatch_plan.json` before `report_write`: it maps each report task to exactly one clean report-writing subagent. If the host supports subagents but requires explicit user approval, ask before dispatching them. At this gate, slide cognition, QA detection, and grounding review may be completed sequentially in the parent context when needed, but report_write cannot be completed sequentially in parent context. Final report writing must produce `worker_type: subagent` provenance, so a parent-written report will fail `validate --phase final`. If the host has no subagent capability or the user does not authorize it, stop at the gate or switch to `--writer evidence` / `--writer openai`; do not pretend the output is an agent-written final report. Do not skip a stage and do not edit any task manifest.
+The agent host does not decide the workflow. Execute tasks in this order: `slide_cognition`, `qa_detection`, dependency validation, `report_write`, then `grounding_review`, then `report-quality` validation, then revision if needed. Read `agent_report_dispatch_plan.json` before `report_write`: it maps each report task to exactly one clean report-writing subagent and records `dependency_validation_phase`, expected dependency counts, and ready/not-ready status. Do not dispatch a report writer until its declared slide cognition and QA dependency outputs exist and the current agent-tasks validation passes. Re-run `validate --phase agent-tasks` after writing slide cognition and QA outputs; this phase validates any existing dependency JSON and refreshes `agent_report_dispatch_plan.json` plus `agent_dependency_status.json` with current readiness. If a worker item still has `dependencies_ready: false`, do not start that report writer.
+
+If the host supports subagents but requires explicit user approval, ask before dispatching them. At this gate, slide cognition, QA detection, and grounding review may be completed sequentially in the parent context when needed, but report_write cannot be completed sequentially in parent context. Final report writing must produce `worker_type: subagent` provenance, so a parent-written report will fail `validate --phase final`. If the host has no subagent capability or the user does not authorize it, stop at the gate or switch to `--writer evidence` / `--writer openai`; do not pretend the output is an agent-written final report. Do not skip a stage and do not edit any task manifest.
 
 Every task is self-contained. Give the worker only the JSON task object and its listed files:
 
 - `task_id` and `stage`: identity and workflow stage
 - `input_paths`: existing files/directories to read
 - `dependency_output_paths`: prior task outputs that must already exist before this task runs
+- `intermediate_output_paths`: required intermediate artifacts such as `talk_synthesis.md`
 - `output_paths`: files this task must produce
 - `allowed_write_paths`: the only paths this task may create or replace
 - `required_sections`, `required_schema`, and `validation_rules`: completion criteria
@@ -116,20 +119,22 @@ Every task is self-contained. Give the worker only the JSON task object and its 
 
 Workers must not edit shared manifests, source files, credentials, cookies, unrelated outputs, or any path not listed in `allowed_write_paths`. Report-writing tasks must write final Markdown reports with the required report structure below.
 
+Use absolute paths exactly as written in the manifests. Do not reconstruct paths from a run name, slug, previous test directory, current shell directory, or memory of an earlier run. When batching several non-report dependency tasks for convenience, the batch prompt must still be a pure union of those exact task objects, `input_paths`, `dependency_output_paths`, and `allowed_write_paths`; never give a worker a broad output root or an old relative `outputs/...` path.
+
 Agent 的目标是 report quality，不是填完文件。不要把 OCR/ASR 机械填进报告，也不要用脚本批量生成浅层 JSON 来伪装已经理解了 talk。
 
-For final report writing, one `agent_report_tasks.json` item equals one dedicated report-writing subagent when the host supports subagents: one clean subagent context per report, not one shared writer across talks. That worker must build topic-level understanding before writing: read the metadata, full ASR transcript or timeline, preserved slide screenshots, OCR evidence, slide cognition outputs, QA outputs, and any synthesis manifests for that assigned topic. The worker should understand the research problem, method, experiments, results, limitations, and speaker intent first, then write the opening overview and per-slide explanations. OCR, ASR, and screenshots are evidence for understanding, not report prose; keep slide screenshots available, but do not turn noisy OCR tokens into concepts or force low-information slides into generic explanations.
+For final report writing, one `agent_report_tasks.json` item equals one dedicated report-writing subagent when the host supports subagents: one clean subagent context per report, not one shared writer across talks. That worker must build topic-level understanding before writing: read the metadata, full ASR transcript or timeline, preserved slide screenshots, OCR evidence, slide cognition outputs, QA outputs, and any synthesis manifests for that assigned topic. The worker first writes `talk_synthesis.md` to the task's `synthesis_path`, summarizing the research problem, method, experiment/result chain, limitations, Q&A boundary, slide role map, evidence-only slides, and uncertainties. Only after that should it write the opening overview and per-slide explanations. OCR, ASR, and screenshots are evidence for understanding, not report prose; keep slide screenshots available, but do not turn noisy OCR tokens into concepts or force low-information slides into generic explanations.
 
 The parent agent's report dispatch job is narrow: read `agent_report_dispatch_plan.json`, create one worker per listed report task, pass only that task object plus its `input_paths` and `dependency_output_paths`, wait for the Markdown report and provenance JSON, then run validation and resume. The parent agent may coordinate workers, but it must not write the final report itself.
 
-Report-writing tasks must also write `report_writer_provenance.json` to the task's `execution_provenance_path`. This is a hard final gate, not optional metadata. The JSON must include `worker_type: subagent`, `isolation_scope: single_report`, `host_agent_framework`, `worker_id`, `assigned_task_id`, `assigned_slug`, `topic_understanding_confirmed: true`, `input_paths_read`, `output_paths_written`, and `allowed_write_paths`. If `validate --phase final` cannot verify this provenance, the run is not complete.
+Report-writing tasks must also write `report_writer_provenance.json` to the task's `execution_provenance_path`. This is a hard final gate, not optional metadata. The JSON must include `worker_type: subagent`, `isolation_scope: single_report`, `host_agent_framework`, `worker_id`, `assigned_task_id`, `assigned_slug`, `topic_understanding_confirmed: true`, `input_paths_read`, `output_paths_written`, and `allowed_write_paths`. `output_paths_written` must include the final Markdown report, `talk_synthesis.md`, and the provenance JSON when the task declares those paths. If a later `report_revision` task rewrites the report, keep provenance assigned to the original `report:<slug>` task named by `original_report_task_id` / `provenance_assignment`; do not replace it with `report-revision:<slug>`. If `validate --phase final` cannot verify this provenance, the run is not complete.
 
 Quality expectations by stage:
 
 - `slide_cognition`: if the host has VLM/image understanding, inspect the slide image. Write `visual_summary`, `speaker_intent`, `main_claims`, `method_details`, `experiment_or_result`, `numbers_and_entities`, `asr_corrections`, `uncertainties`, and `confidence`. If there is no VLM, rely on OCR/ASR conservatively and put the limitation in `uncertainties`.
 - `qa_detection`: write `qa_pairs`, not transcript fragments. Each pair needs `question`, `answer`, `time_range`, `evidence_quotes`, and `confidence`. If no reliable pair exists, leave `qa_pairs` empty and explain why.
-- `report_write`: read all slide cognition and QA outputs first. Synthesize claims and evidence; do not repeat the same page template.
-- `grounding_review`: review the report claim by claim. `checked_claims` must be non-empty for substantive reports; set `requires_revision: true` for unsupported claims, missing slide coverage, template prose, or QA misuse.
+- `report_write`: read all slide cognition and QA outputs first, write `talk_synthesis.md`, then write the final report from that whole-talk understanding. Synthesize claims and evidence; do not repeat the same page template or expose `evidence.json` row numbers, original `slide_index` bookkeeping, or standalone `slide_index:` lines in reader-facing prose.
+- `grounding_review`: review the report claim by claim and as reader-facing prose. `checked_claims` must be non-empty for substantive reports; set `template_or_style_issues` and `requires_revision: true` for unsupported claims, missing slide coverage, template prose, visible audit scaffolding, over-expanded low-information slides, or QA misuse.
 
 After each stage, the parent agent may rerun the task validation phase. After all stages finish, final validation and resume are mandatory:
 
@@ -155,7 +160,7 @@ Repair manifests may include:
 
 Do not only rewrite the report if `agent_quality_repair_plan.json` lists upstream cognition or QA revision tasks. Old completed runs can also be audited with `validate --phase final`; if quality fails, the CLI will write the same repair plan and move `pipeline_state.json` back to a waiting `report_quality_repair` gate.
 
-If `--phase final` fails for any reason, do not claim final reports are complete. Read `validation.json`, `agent_task_validation.json`, and `report_quality_validation.json` when present; fix only the failed task outputs permitted by `allowed_write_paths`, and rerun final validation.
+If `--phase final` fails for any reason, do not claim final reports are complete. Read `validation.json`, `agent_task_validation.json`, and `report_quality_validation.json` when present; fix only the failed task outputs permitted by `allowed_write_paths`, and rerun final validation. When report-quality later passes, an old `agent_quality_repair_plan.json` may be marked `resolved` or `superseded_by` instead of being deleted.
 
 ## Pipeline
 
@@ -188,11 +193,13 @@ Each run directory should contain:
 - `talks/<talk_slug>/evidence.json`: OCR plus ASR evidence per reportable slide
 - `talks/<talk_slug>/slide_cognition/*.json`: persistent agent/VLM cognition for each slide task
 - `talks/<talk_slug>/qa/qa_pairs.json`: persistent QA pair detection output
+- `talks/<talk_slug>/talk_synthesis.md`: report-writer synthesis of the whole talk before final drafting
 - `talks/<talk_slug>/agent_execution/report_writer_provenance.json`: required proof that the report was written by one isolated subagent
 - `talks/<talk_slug>/report_writer_prompt.md`: writer instructions
 - `agent_slide_cognition_tasks.json`: one bounded cognition task per evidence slide when `--writer agent` is used
 - `agent_qa_tasks.json`: one bounded QA detection task per reportable talk/topic
-- `agent_report_dispatch_plan.json`: one worker item per final report-writing subagent, plus authorization and fallback guidance
+- `agent_report_dispatch_plan.json`: one worker item per final report-writing subagent, plus authorization, dependency readiness, and fallback guidance
+- `agent_dependency_status.json`: refreshed readiness summary after `validate --phase agent-tasks`, including missing or invalid report-writing dependencies
 - `agent_report_tasks.json`: one bounded report-writing task per reportable talk/topic
 - `agent_grounding_tasks.json`: one bounded grounding review task per final report
 - `agent_task_validation.json`: machine-readable status for task contract or final-output validation
@@ -213,8 +220,10 @@ Each run directory should contain:
 - Each slide section must preserve image Markdown and time range, then explain the slide by combining visible PPT content with the matching ASR window.
 - Write Chinese explanatory prose while preserving English technical terms.
 - Stay grounded. If PPT, ASR, or OCR is ambiguous, write `不确定` or `ASR 可能错误`; do not add external paper knowledge.
-- Do not produce template prose. Repeated sentences, OCR/ASR copying, fragment QA, or empty grounding review should fail `validate --phase report-quality`.
-- Skip low-information conference logo, blank, chair-transition, and generic cover pages unless they contain substantive talk-specific content.
+- Do not produce template prose. Repeated sentences, OCR/ASR copying, reader-visible audit scaffolding, fragment QA, or empty grounding review should fail `validate --phase report-quality`.
+- Do not put audit language in the report body: avoid phrases such as `证据源为 evidence.json`, `原始 PPT slide_index`, `evidence 记录`, or standalone `slide_index:` metadata lines. Keep these identities in grounding/provenance/synthesis artifacts instead.
+- Keep `local_evidence_index`, `original_slide_index`, and `report_section_number` conceptually separate. Coverage validation accepts common headings such as `第 N 张` and `Slide N`, but the reader-facing prose does not need to display every bookkeeping identity.
+- Skip low-information conference logo, blank, chair-transition, cross-talk transition, repeated Q&A navigation, and generic cover pages unless they contain substantive talk-specific content. Keep them traceable as skipped or evidence-only material instead of forcing a full main-body explanation.
 - Repeated slides should appear once with repeated occurrence ranges, not as duplicate sections.
 
 ## Credentials And Access

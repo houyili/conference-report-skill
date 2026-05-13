@@ -291,6 +291,38 @@ def write_good_agent_outputs(paths: dict[str, Path]) -> None:
     )
 
 
+def enable_talk_synthesis_requirement(paths: dict[str, Path]) -> Path:
+    synthesis = paths["talk_dir"] / "talk_synthesis.md"
+    report_tasks = read_json(paths["talk_dir"].parents[1] / "agent_report_tasks.json")
+    task = report_tasks[0]
+    task["synthesis_path"] = str(synthesis.resolve())
+    task["intermediate_output_paths"] = [str(synthesis.resolve())]
+    if str(synthesis.resolve()) not in task["allowed_write_paths"]:
+        task["allowed_write_paths"].append(str(synthesis.resolve()))
+    task["validation_rules"].append({"type": "talk_synthesis"})
+    write_json(paths["talk_dir"].parents[1] / "agent_report_tasks.json", report_tasks)
+    return synthesis
+
+
+def write_good_talk_synthesis(paths: dict[str, Path], synthesis: Path) -> None:
+    synthesis.write_text(
+        "# Talk synthesis\n\n"
+        "## Core question / 核心问题\n\n"
+        "The talk asks whether identical benchmark-specific preparation makes model ranking comparisons more reliable.\n\n"
+        "## Method / 方法\n\n"
+        "Each model is prepared on the benchmark training split before the held-out test comparison.\n\n"
+        "## Result / 结果\n\n"
+        "The key finding is stronger ranking agreement across benchmarks after train-before-test.\n\n"
+        "## Slide role map\n\n"
+        "- Slide 1 introduces the comparison method and result; no slide is evidence-only in this fixture.\n",
+        encoding="utf-8",
+    )
+    provenance = read_json(paths["provenance"])
+    provenance["output_paths_written"].append(str(synthesis.resolve()))
+    provenance["allowed_write_paths"].append(str(synthesis.resolve()))
+    write_json(paths["provenance"], provenance)
+
+
 def write_bad_quality_outputs(paths: dict[str, Path]) -> None:
     write_json(
         paths["cognition"],
@@ -404,6 +436,12 @@ class ReportQualityGateTests(unittest.TestCase):
             self.assertEqual(report_revision_tasks[0]["stage"], "report_revision")
             self.assertEqual(report_revision_tasks[0]["output_paths"], [str(paths["report"].resolve())])
             self.assertEqual(report_revision_tasks[0]["execution_provenance_path"], str(paths["provenance"].resolve()))
+            self.assertEqual(report_revision_tasks[0]["original_report_task_id"], f"report:{paths['report'].stem}")
+            self.assertEqual(
+                report_revision_tasks[0]["provenance_assignment"]["assigned_task_id"],
+                f"report:{paths['report'].stem}",
+            )
+            self.assertIn("not this report-revision task id", report_revision_tasks[0]["done_condition"])
             self.assertIn(str(paths["provenance"].resolve()), report_revision_tasks[0]["allowed_write_paths"])
             self.assertTrue(report_revision_tasks[0]["requires_subagent"])
 
@@ -496,6 +534,228 @@ class ReportQualityGateTests(unittest.TestCase):
 
             self.assertFalse(result["ok"])
             self.assertTrue(any("missing slide coverage" in error for error in result["errors"]))
+
+    def test_report_quality_accepts_slide_coverage_variants(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            paths = make_agent_quality_run(out)
+            write_good_agent_outputs(paths)
+            paths["report"].write_text(
+                "# Talk One\n\n"
+                "## 摘要\n\n这场 talk 讨论 train-before-test 的比较协议。\n\n"
+                "## 核心 Findings / Experiments / Insights\n\n- Identical preparation before testing makes language model rankings more comparable.\n\n"
+                "## 逐页 PPT 解读\n\n"
+                "### Slide 1 (00:00:00.000 - 00:00:30.000)\n\n"
+                "![slide](../talks/talk_one/slides/slide.png)\n\n"
+                "This slide explains train-before-test as a comparison method and uses identical preparation to make model rankings more comparable.\n\n"
+                "## QA\n\n- Q: Did the talk explain why direct benchmark rankings disagree?\n"
+                "- A: Yes. The speaker attributes disagreement partly to unequal benchmark-specific preparation before evaluation.\n",
+                encoding="utf-8",
+            )
+
+            result = validate_run(out, phase="report-quality")
+
+            self.assertTrue(result["ok"], result)
+            metrics = read_json(out / "report_quality_validation.json")["reports"][0]["metrics"]
+            self.assertEqual(metrics["covered_slide_count"], 1)
+
+    def test_report_quality_accepts_angle_bracket_image_links(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            paths = make_agent_quality_run(out)
+            write_good_agent_outputs(paths)
+            paths["report"].write_text(
+                "# Talk One\n\n"
+                "## 摘要\n\n这场 talk 讨论 train-before-test 的比较协议。\n\n"
+                "## 核心 Findings / Experiments / Insights\n\n- Identical preparation before testing makes language model rankings more comparable.\n\n"
+                "## 逐页 PPT 解读\n\n"
+                "### 第 1 张 PPT (00:00:00.000 - 00:00:30.000)\n\n"
+                "![slide](<../talks/talk_one/slides/slide.png>)\n\n"
+                "This slide explains train-before-test as a comparison method and uses identical preparation to make model rankings more comparable.\n\n"
+                "## QA\n\n- Q: Did the talk explain why direct benchmark rankings disagree?\n"
+                "- A: Yes. The speaker attributes disagreement partly to unequal benchmark-specific preparation before evaluation.\n",
+                encoding="utf-8",
+            )
+
+            result = validate_run(out, phase="report-quality")
+
+            self.assertTrue(result["ok"], result)
+
+    def test_report_quality_accepts_qa_pair_paraphrase_with_key_terms(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            paths = make_agent_quality_run(out)
+            write_good_agent_outputs(paths)
+            paths["report"].write_text(
+                "# Talk One\n\n"
+                "## 摘要\n\n这场 talk 讨论 train-before-test 的比较协议。\n\n"
+                "## 核心 Findings / Experiments / Insights\n\n- Identical preparation before testing makes language model rankings more comparable.\n\n"
+                "## 逐页 PPT 解读\n\n"
+                "### 第 1 张 PPT (00:00:00.000 - 00:00:30.000)\n\n"
+                "![slide](../talks/talk_one/slides/slide.png)\n\n"
+                "This slide explains train-before-test as a comparison method and uses identical preparation to make model rankings more comparable.\n\n"
+                "## QA\n\n"
+                "- qa_pairs 对齐摘要：提问围绕 direct benchmark rankings disagreement；回答指出 unequal benchmark-specific preparation before evaluation 是一个主要原因。\n",
+                encoding="utf-8",
+            )
+
+            result = validate_run(out, phase="report-quality")
+
+            self.assertTrue(result["ok"], result)
+
+    def test_report_quality_accepts_original_slide_index_coverage(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            paths = make_agent_quality_run(out)
+            write_good_agent_outputs(paths)
+            evidence = read_json(paths["talk_dir"] / "evidence.json")
+            evidence[0]["slide_index"] = "9"
+            write_json(paths["talk_dir"] / "evidence.json", evidence)
+            paths["report"].write_text(
+                "# Talk One\n\n"
+                "## 摘要\n\n这场 talk 讨论 train-before-test 的比较协议。\n\n"
+                "## 核心 Findings / Experiments / Insights\n\n- Identical preparation before testing makes language model rankings more comparable.\n\n"
+                "## 逐页 PPT 解读\n\n"
+                "### Slide 9 (00:00:00.000 - 00:00:30.000)\n\n"
+                "![slide](../talks/talk_one/slides/slide.png)\n\n"
+                "This slide explains train-before-test as a comparison method and uses identical preparation to make model rankings more comparable.\n\n"
+                "## QA\n\n- Q: Did the talk explain why direct benchmark rankings disagree?\n"
+                "- A: Yes. The speaker attributes disagreement partly to unequal benchmark-specific preparation before evaluation.\n",
+                encoding="utf-8",
+            )
+
+            result = validate_run(out, phase="report-quality")
+
+            self.assertTrue(result["ok"], result)
+
+    def test_report_quality_ignores_evidence_only_slides_for_main_coverage(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            paths = make_agent_quality_run(out)
+            write_good_agent_outputs(paths)
+            evidence = read_json(paths["talk_dir"] / "evidence.json")
+            evidence.append(
+                {
+                    "slide_index": "2",
+                    "time": "00:00:31.000 - 00:00:40.000",
+                    "image": str(paths["slide"].resolve()),
+                    "ocr_text": "Conference transition screen",
+                    "asr_text": "The chair introduces the next speaker.",
+                    "role": "标题或过渡页",
+                    "evidence_only": True,
+                }
+            )
+            write_json(paths["talk_dir"] / "evidence.json", evidence)
+
+            result = validate_run(out, phase="report-quality")
+
+            self.assertTrue(result["ok"], result)
+            metrics = read_json(out / "report_quality_validation.json")["reports"][0]["metrics"]
+            self.assertEqual(metrics["expected_slide_count"], 1)
+            self.assertEqual(metrics["evidence_only_count"], 1)
+
+    def test_report_quality_rejects_reader_visible_audit_scaffolding(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            paths = make_agent_quality_run(out)
+            write_good_agent_outputs(paths)
+            paths["report"].write_text(
+                "# Talk One\n\n"
+                "## 摘要\n\n这场 talk 讨论 train-before-test 的比较协议。\n\n"
+                "## 核心 Findings / Experiments / Insights\n\n- Identical preparation before testing makes language model rankings more comparable.\n\n"
+                "## 逐页 PPT 解读\n\n"
+                "### 第 1 张 | Slide 1 | slide_index: 1 | 00:00:00.000 - 00:00:30.000\n\n"
+                "slide_index: 1\n\n"
+                "![slide](../talks/talk_one/slides/slide.png)\n\n"
+                "证据源为 evidence.json 第 1 条，原始 PPT slide_index 为 1。这页说明 train-before-test 会让模型排名更可比较。\n\n"
+                "## QA\n\n- Q: Did the talk explain why direct benchmark rankings disagree?\n"
+                "- A: Yes. The speaker attributes disagreement partly to unequal benchmark-specific preparation before evaluation.\n",
+                encoding="utf-8",
+            )
+
+            result = validate_run(out, phase="report-quality")
+
+            self.assertFalse(result["ok"])
+            quality = read_json(out / "report_quality_validation.json")
+            self.assertIn("scaffolding", quality["reports"][0]["quality_issue_classes"])
+            self.assertTrue(any("audit scaffolding" in error for error in quality["reports"][0]["errors"]))
+
+    def test_report_quality_rejects_repeated_slide_index_lines(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            paths = make_agent_quality_run(out)
+            write_good_agent_outputs(paths)
+            evidence = read_json(paths["talk_dir"] / "evidence.json")
+            for idx in [2, 3, 4]:
+                slide = paths["talk_dir"] / "slide_cognition" / f"{idx:04d}.json"
+                slide.parent.mkdir(parents=True, exist_ok=True)
+                slide.write_text(paths["cognition"].read_text(encoding="utf-8"), encoding="utf-8")
+                evidence.append(
+                    {
+                        "slide_index": str(idx),
+                        "time": f"00:00:{idx * 10:02d}.000 - 00:00:{idx * 10 + 5:02d}.000",
+                        "image": str(paths["slide"].resolve()),
+                        "ocr_text": "Method: train-before-test. Result: ranking agreement improves across benchmarks.",
+                        "asr_text": "The slide explains a method for comparing model rankings after identical preparation.",
+                        "role": "方法页",
+                    }
+                )
+            write_json(paths["talk_dir"] / "evidence.json", evidence)
+            cognition_tasks = read_json(out / "agent_slide_cognition_tasks.json")
+            for idx in [2, 3, 4]:
+                path = paths["talk_dir"] / "slide_cognition" / f"{idx:04d}.json"
+                cognition_tasks.append({**cognition_tasks[0], "task_id": f"slide-cognition:talk_one:{idx:04d}", "slide_index": idx, "output_paths": [str(path.resolve())], "allowed_write_paths": [str(path.resolve())]})
+            write_json(out / "agent_slide_cognition_tasks.json", cognition_tasks)
+            sections = []
+            for idx in [1, 2, 3, 4]:
+                sections.append(
+                    f"### 第 {idx} 张 PPT\n\nslide_index: {idx}\n\n![slide](../talks/talk_one/slides/slide.png)\n\n"
+                    "This slide explains train-before-test as a comparison method and uses identical preparation to make model rankings more comparable.\n"
+                )
+            paths["report"].write_text(
+                "# Talk One\n\n"
+                "## 摘要\n\n这场 talk 讨论 train-before-test 的比较协议。\n\n"
+                "## 核心 Findings / Experiments / Insights\n\n- Identical preparation before testing makes language model rankings more comparable.\n\n"
+                "## 逐页 PPT 解读\n\n"
+                + "\n".join(sections)
+                + "\n## QA\n\n- Q: Did the talk explain why direct benchmark rankings disagree?\n"
+                "- A: Yes. The speaker attributes disagreement partly to unequal benchmark-specific preparation before evaluation.\n",
+                encoding="utf-8",
+            )
+
+            result = validate_run(out, phase="report-quality")
+
+            self.assertFalse(result["ok"])
+            self.assertTrue(any("standalone slide_index" in error or "slide_index metadata" in error for error in result["errors"]))
+
+    def test_report_quality_requires_talk_synthesis_when_declared(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            paths = make_agent_quality_run(out)
+            write_good_agent_outputs(paths)
+            synthesis = enable_talk_synthesis_requirement(paths)
+
+            result = validate_run(out, phase="final")
+
+            self.assertFalse(result["ok"])
+            self.assertTrue(any("talk synthesis" in error.lower() for error in result["errors"]))
+            report_revision_tasks = read_json(out / "agent_report_revision_tasks.json")
+            self.assertEqual(report_revision_tasks[0]["intermediate_output_paths"], [str(synthesis.resolve())])
+            self.assertIn(str(synthesis.resolve()), report_revision_tasks[0]["allowed_write_paths"])
+            self.assertEqual(report_revision_tasks[0]["synthesis_path"], str(synthesis.resolve()))
+            self.assertIn({"type": "talk_synthesis"}, report_revision_tasks[0]["validation_rules"])
+
+    def test_report_quality_accepts_declared_talk_synthesis(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            paths = make_agent_quality_run(out)
+            write_good_agent_outputs(paths)
+            synthesis = enable_talk_synthesis_requirement(paths)
+            write_good_talk_synthesis(paths, synthesis)
+
+            result = validate_run(out, phase="final")
+
+            self.assertTrue(result["ok"], result)
 
     def test_report_quality_rejects_long_ocr_asr_copy(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -624,6 +884,9 @@ class ReportQualityGateTests(unittest.TestCase):
             completed = read_json(out / "pipeline_state.json")
             self.assertEqual(completed["current_status"], "completed")
             self.assertTrue(read_json(out / "reports_manifest.json")["final_reports"])
+            repair_plan = read_json(out / "agent_quality_repair_plan.json")
+            self.assertTrue(repair_plan["resolved"])
+            self.assertIsNone(repair_plan["blocked_gate"])
 
 
 if __name__ == "__main__":

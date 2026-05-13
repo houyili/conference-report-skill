@@ -105,6 +105,37 @@ class ConferenceReportSkillTextTests(unittest.TestCase):
         self.assertIn("report_write cannot be completed sequentially in parent context", text)
         self.assertIn("slide cognition, QA detection, and grounding review may be completed sequentially", text)
 
+    def test_skill_documents_dependency_ready_report_dispatch(self):
+        text = SKILL_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("dependency_validation_phase", text)
+        self.assertIn("Do not dispatch a report writer until", text)
+        self.assertIn("dependency readiness", text)
+        self.assertIn("agent-tasks validation passes", text)
+        self.assertIn("agent_dependency_status.json", text)
+        self.assertIn("dependencies_ready: false", text)
+        self.assertIn("Use absolute paths exactly as written in the manifests", text)
+        self.assertIn("previous test directory", text)
+
+    def test_skill_documents_talk_synthesis_and_reader_prose_contract(self):
+        text = SKILL_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("talk_synthesis.md", text)
+        self.assertIn("synthesis_path", text)
+        self.assertIn("slide role map", text)
+        self.assertIn("reader-visible audit scaffolding", text)
+        self.assertIn("local_evidence_index", text)
+        self.assertIn("original_slide_index", text)
+        self.assertIn("report_section_number", text)
+        self.assertIn("template_or_style_issues", text)
+
+    def test_skill_documents_report_revision_provenance_assignment(self):
+        text = SKILL_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("original_report_task_id", text)
+        self.assertIn("provenance_assignment", text)
+        self.assertIn("report-revision:<slug>", text)
+
 
 if __name__ == "__main__":
     unittest.main()

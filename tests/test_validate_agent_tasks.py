@@ -127,6 +127,26 @@ def write_required_agent_outputs(
                         },
                     )
     for task in read_json(out / "agent_report_tasks.json"):
+        intermediate_outputs = list(task.get("intermediate_output_paths", []))
+        if task.get("synthesis_path") and task["synthesis_path"] not in intermediate_outputs:
+            intermediate_outputs.append(task["synthesis_path"])
+        for output in intermediate_outputs:
+            path = Path(output)
+            if path.name != "talk_synthesis.md":
+                continue
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                "# Talk synthesis\n\n"
+                "## Core question / 核心问题\n\n"
+                "The talk asks how to interpret a method slide as the setup for the later evaluation protocol.\n\n"
+                "## Method / 方法\n\n"
+                "The method uses a shared preparation protocol so the comparison is explained before evaluation claims are made.\n\n"
+                "## Result / 结果\n\n"
+                "The result chain in this fixture is intentionally small: the method slide supports the later report finding about the comparison protocol.\n\n"
+                "## Slide role map\n\n"
+                "- Slide 1 introduces the method and should be treated as the core setup slide, not as an evidence-only page.\n\n",
+                encoding="utf-8",
+            )
         for output in task["output_paths"]:
             path = Path(output)
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -148,6 +168,7 @@ def write_required_agent_outputs(
             provenance_allowed_paths = list(task.get("allowed_write_paths", task["output_paths"]))
             if str(provenance_path.resolve()) not in provenance_allowed_paths:
                 provenance_allowed_paths.append(str(provenance_path.resolve()))
+            outputs_written = task["output_paths"] + intermediate_outputs + [str(provenance_path.resolve())]
             write_json(
                 provenance_path,
                 {
@@ -159,19 +180,50 @@ def write_required_agent_outputs(
                     "assigned_slug": task["slug"],
                     "topic_understanding_confirmed": True,
                     "input_paths_read": task["input_paths"] + task.get("dependency_output_paths", []),
-                    "output_paths_written": task["output_paths"] + [str(provenance_path.resolve())],
+                    "output_paths_written": outputs_written,
                     "allowed_write_paths": provenance_allowed_paths,
                 },
             )
 
 
 class AgentTaskValidationTests(unittest.TestCase):
+    def write_dependency_outputs(self, out: Path, *, valid_cognition: bool = True) -> None:
+        for task in read_json(out / "agent_slide_cognition_tasks.json"):
+            for output in task["output_paths"]:
+                path = Path(output)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                if valid_cognition:
+                    write_json(
+                        path,
+                        {
+                            "visual_summary": "The slide introduces a method page that defines how the comparison protocol is set up.",
+                            "speaker_intent": "The speaker uses this page to explain why the method matters before discussing evaluation.",
+                            "main_claims": ["The method slide establishes the comparison protocol used in the talk."],
+                            "method_details": ["The talk compares models under a shared preparation protocol."],
+                            "experiment_or_result": ["The later evaluation depends on this protocol."],
+                            "numbers_and_entities": ["method", "comparison protocol"],
+                            "asr_corrections": [],
+                            "uncertainties": [],
+                            "confidence": 0.8,
+                        },
+                    )
+                else:
+                    write_json(path, {"visual_summary": "Too shallow", "confidence": 0.4})
+        for task in read_json(out / "agent_qa_tasks.json"):
+            for output in task["output_paths"]:
+                path = Path(output)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                write_json(path, {"qa_pairs": [], "uncertainties": ["No reliable QA pair was detected."], "confidence": 0.7})
+
     def test_final_validation_fails_until_all_agent_outputs_exist(self):
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp)
             make_evidence_scaffold(out)
             make_talk(out, "talk_one", "Talk One")
-            with mock.patch("conference_report.report.ocr_slide_text", return_value="Method slide"):
+            with mock.patch(
+                "conference_report.report.ocr_slide_text",
+                return_value="Method slide with benchmark ranking protocol, evaluation setup, and training details",
+            ):
                 generate_reports(out, make_cfg(), writer="agent")
 
             task_phase = validate_run(out, phase="agent-tasks")
@@ -193,6 +245,41 @@ class AgentTaskValidationTests(unittest.TestCase):
             self.assertEqual(reports_manifest["completed_reports"], reports_manifest["planned_reports"])
             self.assertEqual(reports_manifest["reports"], reports_manifest["completed_reports"])
             self.assertTrue(reports_manifest["final_reports"])
+
+    def test_agent_tasks_validation_checks_existing_dependency_outputs_and_refreshes_dispatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            make_evidence_scaffold(out)
+            make_talk(out, "talk_one", "Talk One")
+            with mock.patch(
+                "conference_report.report.ocr_slide_text",
+                return_value="Method slide with benchmark ranking protocol, evaluation setup, and training details",
+            ):
+                generate_reports(out, make_cfg(), writer="agent")
+
+            initial = validate_run(out, phase="agent-tasks")
+            self.assertTrue(initial["ok"], initial)
+            initial_dispatch = read_json(out / "agent_report_dispatch_plan.json")
+            self.assertFalse(initial_dispatch["workers"][0]["dependencies_ready"])
+            self.assertEqual(initial_dispatch["workers"][0]["dependency_status"]["missing"], 2)
+
+            self.write_dependency_outputs(out, valid_cognition=False)
+            invalid = validate_run(out, phase="agent-tasks")
+            self.assertFalse(invalid["ok"])
+            self.assertTrue(any("main_claims" in error for error in invalid["errors"]))
+            invalid_dispatch = read_json(out / "agent_report_dispatch_plan.json")
+            self.assertFalse(invalid_dispatch["workers"][0]["dependencies_ready"])
+            self.assertEqual(invalid_dispatch["workers"][0]["dependency_status"]["invalid"], 1)
+
+            self.write_dependency_outputs(out, valid_cognition=True)
+            ready = validate_run(out, phase="agent-tasks")
+            self.assertTrue(ready["ok"], ready)
+            dispatch = read_json(out / "agent_report_dispatch_plan.json")
+            self.assertTrue(dispatch["workers"][0]["dependencies_ready"])
+            self.assertEqual(dispatch["dependencies_ready_count"], 1)
+            self.assertEqual(dispatch["workers"][0]["dependency_status"]["existing"], 2)
+            self.assertEqual(dispatch["workers"][0]["dependency_status"]["missing"], 0)
+            self.assertTrue(read_json(out / "agent_dependency_status.json")["ok"])
 
     def test_final_validation_rejects_report_missing_required_section(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -251,7 +338,7 @@ class AgentTaskValidationTests(unittest.TestCase):
             del tasks[0]["execution_provenance_path"]
             del tasks[0]["required_provenance"]
             del tasks[0]["requires_subagent"]
-            tasks[0]["allowed_write_paths"] = [tasks[0]["report_path"]]
+            tasks[0]["allowed_write_paths"] = [tasks[0]["report_path"], tasks[0]["synthesis_path"]]
             write_json(out / "agent_report_tasks.json", tasks)
 
             write_required_agent_outputs(out)

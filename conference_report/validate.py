@@ -20,6 +20,8 @@ REPORT_REQUIRED_SECTIONS = ["摘要", "核心 Findings / Experiments / Insights"
 DEDUPE_REVIEW_TASK_MANIFEST = "dedupe/agent_review_tasks.json"
 REPORT_QUALITY_FILE = "report_quality_validation.json"
 QUALITY_REPAIR_PLAN_FILE = "agent_quality_repair_plan.json"
+REPORT_DISPATCH_PLAN_FILE = "agent_report_dispatch_plan.json"
+AGENT_DEPENDENCY_STATUS_FILE = "agent_dependency_status.json"
 SLIDE_COGNITION_REVISION_TASKS_FILE = "agent_slide_cognition_revision_tasks.json"
 QA_REVISION_TASKS_FILE = "agent_qa_revision_tasks.json"
 REVISION_TASKS_FILE = "agent_report_revision_tasks.json"
@@ -45,6 +47,13 @@ TEMPLATE_PHRASES = [
     "若 OCR/ASR 有误，应以截图中的可见文字为优先依据",
     "这页在报告结构中更像是",
 ]
+
+AUDIT_SCAFFOLD_PATTERNS = {
+    "evidence_json_reference": re.compile(r"(证据源为\s*evidence\.json|evidence\.json\s*第\s*\d+\s*条)", re.IGNORECASE),
+    "evidence_record_reference": re.compile(r"evidence\s+记录"),
+    "original_slide_index_reference": re.compile(r"原始\s*PPT\s*slide[_ ]?index", re.IGNORECASE),
+    "standalone_slide_index_line": re.compile(r"(?m)^\s*slide_index\s*:\s*\d+\s*$", re.IGNORECASE),
+}
 
 V2_SLIDE_COGNITION_FIELDS = {
     "visual_summary",
@@ -106,7 +115,12 @@ def markdown_image_errors(report: Path) -> list[str]:
     errors: list[str] = []
     text = report.read_text(encoding="utf-8", errors="ignore")
     for match in re.finditer(r"!\[[^\]]*\]\(([^)]+)\)", text):
-        raw_link = unquote(match.group(1)).split("#", 1)[0]
+        raw_link = match.group(1).strip()
+        if raw_link.startswith("<") and raw_link.endswith(">"):
+            raw_link = raw_link[1:-1].strip()
+        elif re.search(r"\s+['\"]", raw_link):
+            raw_link = raw_link.split(None, 1)[0]
+        raw_link = unquote(raw_link).split("#", 1)[0]
         if "://" in raw_link:
             continue
         image = (report.parent / raw_link).resolve()
@@ -206,7 +220,7 @@ def load_task_manifests(out_dir: Path, errors: list[str], *, expect_agent: bool)
     return tasks
 
 
-def validate_task_contract(task: dict[str, Any], *, final: bool) -> dict[str, Any]:
+def validate_task_contract(task: dict[str, Any], *, final: bool, validate_existing_outputs: bool = False) -> dict[str, Any]:
     task_errors: list[str] = []
     task_id = str(task.get("task_id", "<missing>"))
     stage = str(task.get("stage", "<missing>"))
@@ -243,6 +257,7 @@ def validate_task_contract(task: dict[str, Any], *, final: bool) -> dict[str, An
                     if section in missing_markdown_sections(output_path, [str(section)]):
                         task_errors.append(f"Missing required section {section} in {output}")
                 task_errors.extend(markdown_image_errors(output_path))
+                task_errors.extend(validate_talk_synthesis(task))
                 task_errors.extend(
                     validate_report_execution_provenance(
                         task,
@@ -256,7 +271,147 @@ def validate_task_contract(task: dict[str, Any], *, final: bool) -> dict[str, An
                 task_errors.extend(validate_declared_json_schema(output_path, task["required_schema"]))
             else:
                 task_errors.extend(validate_json_schema(output_path, stage))
+    elif validate_existing_outputs and stage != "report_write":
+        for output in output_paths:
+            output_path = Path(output)
+            if not output_path.exists():
+                continue
+            if isinstance(task.get("required_schema"), dict):
+                task_errors.extend(validate_declared_json_schema(output_path, task["required_schema"]))
+            else:
+                task_errors.extend(validate_json_schema(output_path, stage))
     return {"task_id": task_id, "stage": stage, "ok": not task_errors, "errors": task_errors}
+
+
+def refresh_report_dispatch_plan(
+    out_dir: Path,
+    tasks: list[dict[str, Any]],
+    task_results: list[dict[str, Any]],
+    *,
+    agent_tasks_ok: bool,
+) -> None:
+    report_tasks = [task for task in tasks if task.get("stage") == "report_write"]
+    if not report_tasks:
+        return
+    result_by_task_id = {str(result.get("task_id")): result for result in task_results}
+    owner_by_output: dict[str, dict[str, Any]] = {}
+    for task in tasks:
+        task_id = str(task.get("task_id", ""))
+        for output in task.get("output_paths", []):
+            if isinstance(output, str):
+                owner_by_output[normalize_path(output)] = {
+                    "task_id": task_id,
+                    "stage": task.get("stage"),
+                    "slug": task.get("slug"),
+                    "result": result_by_task_id.get(task_id, {}),
+                }
+
+    def dependency_status(task: dict[str, Any]) -> dict[str, Any]:
+        dependency_paths = [
+            normalize_path(path)
+            for path in task.get("dependency_output_paths", [])
+            if isinstance(path, str)
+        ]
+        missing = [path for path in dependency_paths if not Path(path).exists()]
+        invalid: list[dict[str, Any]] = []
+        for path in dependency_paths:
+            if path in missing:
+                continue
+            owner = owner_by_output.get(path)
+            result = owner.get("result", {}) if owner else {}
+            if owner and result.get("ok") is False:
+                invalid.append(
+                    {
+                        "path": path,
+                        "task_id": owner.get("task_id"),
+                        "stage": owner.get("stage"),
+                        "errors": list(result.get("errors") or [])[:3],
+                    }
+                )
+        return {
+            "expected": len(dependency_paths),
+            "existing": len(dependency_paths) - len(missing),
+            "missing": len(missing),
+            "invalid": len(invalid),
+            "missing_paths": missing[:10],
+            "invalid_dependencies": invalid[:10],
+            "ready": not missing and not invalid,
+        }
+
+    status_by_task_id = {
+        str(task.get("task_id")): dependency_status(task)
+        for task in report_tasks
+    }
+
+    dispatch_path = out_dir / REPORT_DISPATCH_PLAN_FILE
+    if dispatch_path.exists():
+        try:
+            dispatch = read_json(dispatch_path)
+        except Exception:
+            dispatch = {}
+    else:
+        dispatch = {}
+    if not isinstance(dispatch, dict):
+        dispatch = {}
+    workers = dispatch.get("workers")
+    if not isinstance(workers, list):
+        workers = []
+    if not workers:
+        workers = [
+            {
+                "worker_id": f"report-writer:{task.get('slug', idx)}",
+                "worker_type": "subagent",
+                "isolation_scope": "single_report",
+                "stage": "report_write",
+                "task_id": task.get("task_id"),
+                "slug": task.get("slug"),
+                "title": task.get("title"),
+                "task": task,
+                "dependency_output_paths": task.get("dependency_output_paths", []),
+                "output_paths": task.get("output_paths", []),
+                "allowed_write_paths": task.get("allowed_write_paths", []),
+                "execution_provenance_path": task.get("execution_provenance_path"),
+            }
+            for idx, task in enumerate(report_tasks, start=1)
+        ]
+
+    for worker in workers:
+        if not isinstance(worker, dict):
+            continue
+        task = worker.get("task") if isinstance(worker.get("task"), dict) else {}
+        task_id = str(worker.get("task_id") or task.get("task_id") or "")
+        status = status_by_task_id.get(task_id)
+        if not status:
+            continue
+        worker["dependency_validation_phase"] = "agent-tasks"
+        worker["expected_dependency_count"] = status["expected"]
+        worker["dependencies_ready"] = bool(status["ready"])
+        worker["dependency_status"] = status
+
+    ready_count = sum(1 for item in status_by_task_id.values() if item["ready"])
+    dispatch.update(
+        {
+            "stage": dispatch.get("stage") or "report_write",
+            "requires_subagents": True,
+            "required_report_subagents": len(report_tasks),
+            "last_dependency_validation_phase": "agent-tasks",
+            "agent_tasks_validation_ok": agent_tasks_ok,
+            "dependencies_ready_count": ready_count,
+            "dependencies_blocked_count": len(report_tasks) - ready_count,
+            "workers": workers,
+        }
+    )
+    write_json(dispatch_path, dispatch)
+    write_json(
+        out_dir / AGENT_DEPENDENCY_STATUS_FILE,
+        {
+            "ok": agent_tasks_ok and ready_count == len(report_tasks),
+            "phase": "agent-tasks",
+            "report_tasks": status_by_task_id,
+            "ready_report_tasks": ready_count,
+            "blocked_report_tasks": len(report_tasks) - ready_count,
+        },
+    )
 
 
 def validate_report_execution_provenance(
@@ -340,7 +495,12 @@ def validate_report_execution_provenance(
     if missing_reads:
         errors.append(f"Report execution provenance missing input_paths_read for {task_id}: {missing_reads[:3]}")
     written_norm = {normalize_path(path) for path in output_paths_written if isinstance(path, str)}
-    expected_writes = set(output_paths + [provenance_norm])
+    intermediate_paths = [
+        normalize_path(path)
+        for path in task.get("intermediate_output_paths", [])
+        if isinstance(path, str)
+    ]
+    expected_writes = set(output_paths + intermediate_paths + [provenance_norm])
     missing_writes = sorted(path for path in expected_writes if path not in written_norm)
     if missing_writes:
         errors.append(f"Report execution provenance missing output_paths_written for {task_id}: {missing_writes[:3]}")
@@ -369,6 +529,43 @@ def report_execution_provenance_path(task: dict[str, Any]) -> Path | None:
         report = Path(normalize_path(report_path))
         return report.parent / f"{report.stem}.provenance.json"
     return None
+
+
+def talk_synthesis_path(task: dict[str, Any]) -> Path | None:
+    value = task.get("synthesis_path")
+    if isinstance(value, str) and value:
+        return Path(normalize_path(value))
+    for path in task.get("intermediate_output_paths", []):
+        candidate = Path(str(path))
+        if candidate.name == "talk_synthesis.md":
+            return Path(normalize_path(candidate))
+    return None
+
+
+def validate_talk_synthesis(task: dict[str, Any]) -> list[str]:
+    path = talk_synthesis_path(task)
+    if path is None:
+        return []
+    if not path.exists():
+        return [f"Missing talk synthesis for {task.get('task_id', '<missing>')}: {path}"]
+    text = path.read_text(encoding="utf-8", errors="ignore")
+    normalized = normalize_text(text)
+    if len(normalized) < 240:
+        return [f"talk_synthesis.md is too short for {task.get('task_id', '<missing>')}: {path}"]
+    required_markers = [
+        ("core question", "核心问题", "research problem"),
+        ("method", "方法"),
+        ("result", "结果", "finding"),
+        ("slide", "逐页", "slide role"),
+    ]
+    missing = [
+        "/".join(markers)
+        for markers in required_markers
+        if not any(marker.lower() in normalized for marker in markers)
+    ]
+    if missing:
+        return [f"talk_synthesis.md missing synthesis section markers {missing} for {task.get('task_id', '<missing>')}: {path}"]
+    return []
 
 
 def validate_dedupe_review_tasks(out_dir: Path, errors: list[str]) -> dict[str, Any]:
@@ -408,7 +605,10 @@ def validate_agent_tasks(out_dir: Path, *, phase: str, errors: list[str]) -> dic
     expect_agent = reports_manifest.get("writer_mode") == "agent"
     tasks = load_task_manifests(out_dir, errors, expect_agent=expect_agent)
     final = phase == "final"
-    task_results = [validate_task_contract(task, final=final) for task in tasks]
+    task_results = [
+        validate_task_contract(task, final=final, validate_existing_outputs=phase == "agent-tasks")
+        for task in tasks
+    ]
     for result in task_results:
         errors.extend(result["errors"])
     if final and expect_agent:
@@ -444,6 +644,8 @@ def validate_agent_tasks(out_dir: Path, *, phase: str, errors: list[str]) -> dic
         write_json(out_dir / "reports_manifest.json", reports_manifest)
     result = {"ok": ok, "phase": phase, "manifest_errors": local_errors, "tasks": task_results}
     write_json(out_dir / "agent_task_validation.json", result)
+    if expect_agent:
+        refresh_report_dispatch_plan(out_dir, tasks, task_results, agent_tasks_ok=ok)
     return result
 
 
@@ -568,6 +770,44 @@ def report_template_errors(text: str, slide_count: int) -> tuple[list[str], dict
     return errors, {"template_phrase_hits": phrase_hits, "total_template_hits": total_hits, "repeated_sentence_count": len(repeated)}
 
 
+def report_style_scaffold_errors(text: str, slide_count: int) -> tuple[list[str], dict[str, Any]]:
+    errors: list[str] = []
+    hits: dict[str, int] = {}
+    examples: dict[str, list[str]] = {}
+    for name, pattern in AUDIT_SCAFFOLD_PATTERNS.items():
+        matches = list(pattern.finditer(text))
+        hits[name] = len(matches)
+        if matches:
+            examples[name] = [normalize_text(match.group(0))[:120] for match in matches[:3]]
+
+    explicit_scaffold_hits = (
+        hits["evidence_json_reference"]
+        + hits["evidence_record_reference"]
+        + hits["original_slide_index_reference"]
+    )
+    if explicit_scaffold_hits:
+        errors.append(f"report exposes audit scaffolding in reader prose: {hits}")
+
+    slide_index_threshold = max(2, slide_count // 4)
+    if hits["standalone_slide_index_line"] > slide_index_threshold:
+        errors.append(
+            "report repeats standalone slide_index metadata lines "
+            f"{hits['standalone_slide_index_line']} times; keep slide identity in grounding/provenance, not prose"
+        )
+
+    page_opening_count = len(re.findall(r"(?:^|\n)\s*(?:这一页|这页)", text))
+    opening_threshold = max(4, slide_count // 3)
+    if page_opening_count > opening_threshold:
+        errors.append(f"report uses repetitive per-slide opening wording {page_opening_count} times")
+
+    metrics = {
+        "audit_scaffold_hits": hits,
+        "audit_scaffold_examples": examples,
+        "page_opening_count": page_opening_count,
+    }
+    return errors, metrics
+
+
 def report_uses_cognition(text: str, cognition_paths: list[Path]) -> bool:
     normalized_report = normalize_text(text)
     for path in cognition_paths:
@@ -589,7 +829,9 @@ def report_uses_cognition(text: str, cognition_paths: list[Path]) -> bool:
 
 
 def report_uses_qa_pairs(text: str, qa_paths: list[Path]) -> bool:
-    normalized_report = normalize_text(text)
+    qa_section = markdown_section_text(text, "QA") or text
+    normalized_report = normalize_text(qa_section)
+    report_tokens = qa_content_tokens(qa_section)
     found_pairs = False
     for path in qa_paths:
         if not path.exists():
@@ -604,8 +846,26 @@ def report_uses_qa_pairs(text: str, qa_paths: list[Path]) -> bool:
             found_pairs = True
             question = normalize_text(str(pair.get("question", "")))
             answer = normalize_text(str(pair.get("answer", "")))
-            if question[:40] in normalized_report or answer[:40] in normalized_report:
+            if (len(question) >= 12 and question[:40] in normalized_report) or (
+                len(answer) >= 12 and answer[:40] in normalized_report
+            ):
                 return True
+            evidence_quotes = pair.get("evidence_quotes", [])
+            evidence_text = " ".join(str(item) for item in evidence_quotes) if isinstance(evidence_quotes, list) else ""
+            pair_tokens = qa_content_tokens(
+                " ".join(
+                    [
+                        str(pair.get("question", "")),
+                        str(pair.get("answer", "")),
+                        evidence_text,
+                    ]
+                )
+            )
+            if pair_tokens:
+                overlap = pair_tokens & report_tokens
+                threshold = min(4, max(2, len(pair_tokens) // 4))
+                if len(overlap) >= threshold:
+                    return True
     return not found_pairs
 
 
@@ -662,6 +922,87 @@ def existing_or_manifest_qa_paths(report_task: dict[str, Any], qa_tasks: list[di
     return paths
 
 
+QA_TOKEN_STOPWORDS = {
+    "about",
+    "after",
+    "answer",
+    "before",
+    "could",
+    "does",
+    "explain",
+    "have",
+    "like",
+    "question",
+    "that",
+    "their",
+    "there",
+    "this",
+    "talk",
+    "what",
+    "when",
+    "where",
+    "which",
+    "while",
+    "with",
+    "would",
+}
+
+
+def markdown_section_text(text: str, section: str) -> str:
+    headings = list(re.finditer(r"^(#{1,6})\s+(.+)$", text, flags=re.MULTILINE))
+    for idx, heading in enumerate(headings):
+        if section.lower() not in heading.group(2).lower():
+            continue
+        start = heading.end()
+        current_level = len(heading.group(1))
+        end = len(text)
+        for next_heading in headings[idx + 1 :]:
+            if len(next_heading.group(1)) <= current_level:
+                end = next_heading.start()
+                break
+        return text[start:end]
+    return ""
+
+
+def qa_content_tokens(text: str) -> set[str]:
+    tokens = {
+        token.lower()
+        for token in re.findall(r"[A-Za-z][A-Za-z0-9-]{3,}|\d+(?:\.\d+)?%?", text)
+    }
+    return {token for token in tokens if token not in QA_TOKEN_STOPWORDS}
+
+
+def expected_evidence_rows(evidence: list[Any]) -> list[tuple[int, int | None, bool]]:
+    rows: list[tuple[int, int | None, bool]] = []
+    for local_idx, row in enumerate(evidence, start=1):
+        original_idx: int | None = None
+        evidence_only = False
+        if isinstance(row, dict):
+            raw_local = row.get("local_evidence_index")
+            if str(raw_local).isdigit():
+                local_idx = int(str(raw_local))
+            raw = row.get("original_slide_index", row.get("slide_index"))
+            if str(raw).isdigit():
+                original_idx = int(str(raw))
+            evidence_only = bool(row.get("evidence_only") or row.get("report_evidence_only"))
+        rows.append((local_idx, original_idx, evidence_only))
+    return rows
+
+
+def report_slide_references(text: str) -> set[int]:
+    patterns = [
+        r"^#{2,6}\s*第\s*(\d+)\s*张",
+        r"^#{2,6}.*?\bSlide\s+(\d+)\b",
+        r"(?m)^\s*slide_index\s*:\s*(\d+)\s*$",
+    ]
+    refs: set[int] = set()
+    for pattern in patterns:
+        for match in re.finditer(pattern, text, flags=re.MULTILINE | re.IGNORECASE):
+            if match.group(1).isdigit():
+                refs.add(int(match.group(1)))
+    return refs
+
+
 def evidence_copy_and_coverage_errors(text: str, evidence_path: Path | None) -> tuple[list[str], dict[str, Any]]:
     if evidence_path is None or not evidence_path.exists():
         return [], {}
@@ -672,14 +1013,26 @@ def evidence_copy_and_coverage_errors(text: str, evidence_path: Path | None) -> 
     if not isinstance(evidence, list):
         return [], {}
     errors: list[str] = []
-    metrics: dict[str, Any] = {"expected_slide_count": len(evidence)}
-    heading_numbers = {
-        int(match.group(1))
-        for match in re.finditer(r"^#{2,6}\s*第\s*(\d+)\s*张", text, flags=re.MULTILINE)
-        if match.group(1).isdigit()
+    rows = expected_evidence_rows(evidence)
+    reportable_rows = [(local, original) for local, original, evidence_only in rows if not evidence_only]
+    refs = report_slide_references(text)
+    metrics: dict[str, Any] = {
+        "expected_slide_count": len(reportable_rows),
+        "total_evidence_count": len(evidence),
+        "evidence_only_count": len(evidence) - len(reportable_rows),
+        "coverage_reference_count": len(refs),
     }
-    metrics["covered_slide_count"] = len(heading_numbers)
-    missing_slides = [idx for idx in range(1, len(evidence) + 1) if idx not in heading_numbers]
+    covered_rows = [
+        local
+        for local, original in reportable_rows
+        if local in refs or (original is not None and original in refs)
+    ]
+    metrics["covered_slide_count"] = len(covered_rows)
+    missing_slides = [
+        local
+        for local, original in reportable_rows
+        if local not in refs and (original is None or original not in refs)
+    ]
     if missing_slides:
         errors.append(f"report is missing slide coverage for slide(s): {missing_slides[:5]}")
     normalized_report = normalized_copy_text(text)
@@ -789,7 +1142,19 @@ def write_quality_repair_tasks(out_dir: Path, report_results: list[dict[str, Any
         if "report_revision_required" in issue_types and report_outputs:
             provenance = report_execution_provenance_path(report_task)
             provenance_path = str(provenance) if provenance is not None else None
+            original_report_task_id = str(report_task.get("task_id", f"report:{slug}"))
+            intermediate_outputs = [
+                str(Path(str(path)))
+                for path in report_task.get("intermediate_output_paths", [])
+                if isinstance(path, str)
+            ]
+            synthesis = talk_synthesis_path(report_task)
+            if synthesis is not None and str(synthesis) not in intermediate_outputs:
+                intermediate_outputs.append(str(synthesis))
             report_allowed_writes = list(report_outputs)
+            for path in intermediate_outputs:
+                if path not in report_allowed_writes:
+                    report_allowed_writes.append(path)
             if provenance_path and provenance_path not in report_allowed_writes:
                 report_allowed_writes.append(provenance_path)
             report_revision_tasks.append(
@@ -800,21 +1165,31 @@ def write_quality_repair_tasks(out_dir: Path, report_results: list[dict[str, Any
                     "title": title,
                     "input_paths": list(report_task.get("input_paths", [])) + [str(quality_path)],
                     "dependency_output_paths": cognition_outputs + qa_outputs,
+                    "intermediate_output_paths": intermediate_outputs,
                     "output_paths": report_outputs,
                     "allowed_write_paths": report_allowed_writes,
+                    "synthesis_path": str(synthesis) if synthesis is not None else None,
                     "execution_provenance_path": provenance_path,
+                    "original_report_task_id": original_report_task_id,
+                    "provenance_assignment": {
+                        "assigned_task_id": original_report_task_id,
+                        "assigned_slug": slug,
+                        "worker_type": "subagent",
+                        "isolation_scope": "single_report",
+                    },
                     "requires_subagent": True,
                     "required_provenance": report_task.get("required_provenance"),
                     "required_sections": report_task.get("required_sections", REPORT_REQUIRED_SECTIONS),
                     "validation_rules": [
                         {"type": "exists", "paths": "output_paths"},
                         {"type": "markdown_required_sections", "sections": report_task.get("required_sections", REPORT_REQUIRED_SECTIONS)},
+                        {"type": "talk_synthesis"},
                         {"type": "execution_provenance", "worker_type": "subagent", "isolation_scope": "single_report"},
                         {"type": "report_quality"},
                         {"type": "allowed_writes"},
                     ],
                     "quality_errors": result.get("report_errors", [])[:8],
-                    "done_condition": "Rewrite this Markdown report and update execution provenance after cognition and QA revisions are complete.",
+                    "done_condition": "Rewrite this Markdown report, update talk_synthesis.md when declared, and update execution provenance after cognition and QA revisions are complete. Provenance assigned_task_id must remain the original report task id, not this report-revision task id.",
                 }
             )
         if "grounding_revision_required" in issue_types and grounding_outputs:
@@ -863,6 +1238,7 @@ def write_quality_repair_tasks(out_dir: Path, report_results: list[dict[str, Any
                 "slug": item.get("slug"),
                 "report_path": item.get("report_path"),
                 "issue_types": item.get("issue_types", []),
+                "quality_issue_classes": item.get("quality_issue_classes", []),
                 "first_errors": item.get("errors", [])[:5],
             }
             for item in failed_reports
@@ -878,6 +1254,40 @@ def write_quality_repair_tasks(out_dir: Path, report_results: list[dict[str, Any
         "resume_command": repair_plan_command(out_dir, "resume"),
     }
     write_json(out_dir / QUALITY_REPAIR_PLAN_FILE, plan)
+
+
+def resolve_quality_repair_plan(out_dir: Path) -> None:
+    path = out_dir / QUALITY_REPAIR_PLAN_FILE
+    if not path.exists():
+        return
+    try:
+        plan = read_json(path)
+    except Exception:
+        return
+    if not isinstance(plan, dict):
+        return
+    plan["resolved"] = True
+    plan["superseded_by"] = REPORT_QUALITY_FILE
+    plan["blocked_gate"] = None
+    plan["reason"] = "resolved after report-quality validation passed"
+    write_json(path, plan)
+
+
+def quality_issue_classes(report_errors: list[str]) -> list[str]:
+    classes: set[str] = set()
+    for error in report_errors:
+        lowered = error.lower()
+        if "missing slide coverage" in lowered:
+            classes.add("coverage")
+        if "copies long ocr/asr" in lowered or "audit scaffolding" in lowered or "slide_index metadata" in lowered:
+            classes.add("scaffolding")
+        if "template" in lowered or "repetitive" in lowered or "stock phrase" in lowered:
+            classes.add("style")
+        if "talk_synthesis" in lowered:
+            classes.add("synthesis")
+        if "unsupported" in lowered or "grounding" in lowered or "does not appear to use" in lowered:
+            classes.add("support")
+    return sorted(classes)
 
 
 def write_revision_tasks(out_dir: Path, report_results: list[dict[str, Any]], grouped_tasks: dict[str, dict[str, list[dict[str, Any]]]]) -> None:
@@ -925,6 +1335,10 @@ def validate_report_quality(out_dir: Path, errors: list[str]) -> dict[str, Any]:
             template_errors, template_metrics = report_template_errors(text, len(cognition_paths))
             report_content_errors.extend(template_errors)
             metrics.update(template_metrics)
+            style_errors, style_metrics = report_style_scaffold_errors(text, len(cognition_paths))
+            report_content_errors.extend(style_errors)
+            metrics.update(style_metrics)
+            report_content_errors.extend(validate_talk_synthesis(report_task))
             if cognition_paths and not report_uses_cognition(text, cognition_paths):
                 report_content_errors.append(f"report does not appear to use slide_cognition claims for {slug}")
             if qa_paths and not report_uses_qa_pairs(text, qa_paths):
@@ -939,6 +1353,7 @@ def validate_report_quality(out_dir: Path, errors: list[str]) -> dict[str, Any]:
         if grounding_errors:
             issue_types.append("grounding_revision_required")
         report_errors = cognition_errors + qa_errors + report_content_errors + grounding_errors
+        issue_classes = quality_issue_classes(report_errors)
         report_results.append(
             {
                 "slug": slug,
@@ -946,6 +1361,7 @@ def validate_report_quality(out_dir: Path, errors: list[str]) -> dict[str, Any]:
                 "ok": not report_errors,
                 "errors": report_errors,
                 "issue_types": issue_types,
+                "quality_issue_classes": issue_classes,
                 "cognition_errors": cognition_errors,
                 "qa_errors": qa_errors,
                 "report_errors": report_content_errors,
@@ -965,10 +1381,13 @@ def validate_report_quality(out_dir: Path, errors: list[str]) -> dict[str, Any]:
         reports_manifest["pending_reports"] = []
         reports_manifest["completed_reports"] = list(reports_manifest.get("planned_reports", []))
         reports_manifest["reports"] = list(reports_manifest.get("planned_reports", []))
+    if ok:
+        resolve_quality_repair_plan(out_dir)
     write_json(out_dir / "reports_manifest.json", reports_manifest)
     result = {"ok": ok, "phase": "report-quality", "reports": report_results, "manifest_errors": local_errors}
     write_json(out_dir / REPORT_QUALITY_FILE, result)
-    write_quality_repair_tasks(out_dir, report_results, grouped)
+    if not ok:
+        write_quality_repair_tasks(out_dir, report_results, grouped)
     return result
 
 

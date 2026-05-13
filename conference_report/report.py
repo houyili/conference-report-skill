@@ -15,6 +15,7 @@ from .utils import ensure_dir, find_tool, parse_time_seconds, read_json, write_j
 WRITER_MODES = {"auto", "agent", "openai", "evidence"}
 REPORT_REQUIRED_SECTIONS = ["摘要", "核心 Findings / Experiments / Insights", "逐页 PPT 解读", "QA"]
 REPORT_DISPATCH_PLAN_FILE = "agent_report_dispatch_plan.json"
+TALK_SYNTHESIS_FILE = "talk_synthesis.md"
 REPORT_SUBAGENT_AUTHORIZATION_MESSAGE = "请用户明确授权为每个 report task 启动独立 subagent。"
 REPORT_SUBAGENT_FALLBACK_OPTIONS = [
     {
@@ -295,19 +296,22 @@ def write_report_writer_prompt(talk_dir: Path, metadata: dict[str, Any], *, skip
 - `skipped_slides.json`: 被跳过的低信息量页面，共 {skipped_count} 张
 - `slide_cognition/`: agent/VLM 对每页截图的持久化视觉认知 JSON（如果 host agent 已执行）
 - `qa/qa_pairs.json`: agent 合并 transcript 后形成的问答对（如果 host agent 已执行）
+- `talk_synthesis.md`: 你必须先写出的整场 talk 理解草稿，然后再写最终报告
 
 ## 写作规则
 
 1. 只依据 PPT 截图、`timeline.txt`、`slide_intervals.json`、`metadata.json`，不要补充外部知识。
 2. 输出中文，技术术语保留英文。
-3. 不要逐字转写 OCR/ASR。要先理解每一页在 talk 里的作用，再写解释。
-4. 每一页解释必须同时参考 PPT 可见内容和演讲者在对应时间窗说的话。
-5. ASR 明显错误时，按 PPT 和上下文保守纠正；不确定就写“不确定，ASR 可能错误”。
-6. 省略 conference logo、空白页、主持人纯转场页，不要在正文中解释这些页面。
-7. 报告结构固定为：摘要、核心 Findings / Experiments / Insights、逐页 PPT 解读、QA。
-8. 逐页章节中保留图片 Markdown、时间范围，并写 1-3 段有信息量的解释。
-9. 如果存在 `slide_cognition/` 和 `qa/qa_pairs.json`，报告必须消费这些文件；不要把 OCR/ASR 机械填进报告。
-10. 每个主要 finding 要能追溯到具体 slide/time/evidence；没有证据的 claim 不要写。
+3. 先写 `talk_synthesis.md`，再写最终 Markdown 报告。这个 synthesis 要概括：核心问题、方法、实验/结果链条、限制、Q&A 边界、每页 slide 在整场论证里的角色、哪些页只适合作为 evidence-only/appendix。
+4. 不要逐字转写 OCR/ASR。要先理解整场 talk，再解释每一页如何推进 research problem -> method -> evidence -> conclusion。
+5. 每一页解释必须同时参考 PPT 可见内容和演讲者在对应时间窗说的话，但正文不要写成 evidence checklist。
+6. ASR 明显错误时，按 PPT 和上下文保守纠正；不确定就写“不确定，ASR 可能错误”。
+7. 省略 conference logo、空白页、主持人纯转场页、跨 talk 过渡页、Q&A 中只作为导航背景的重复页；这些页可在 `talk_synthesis.md` 或 QA/appendix 里说明，不要在主报告正文中强行扩写。
+8. 报告结构固定为：摘要、核心 Findings / Experiments / Insights、逐页 PPT 解读、QA。
+9. 逐页章节中保留图片 Markdown、时间范围，并写 1-3 段有信息量的解释。
+10. 如果存在 `slide_cognition/` 和 `qa/qa_pairs.json`，报告必须消费这些文件；不要把 OCR/ASR 机械填进报告。
+11. 每个主要 finding 要能追溯到具体 slide/time/evidence；没有证据的 claim 不要写。
+12. 不要把审计脚手架写进读者正文：禁止出现“证据源为 evidence.json 第 N 条”“原始 PPT slide_index 为 N”“evidence 记录”“slide_index:”这类正文行。证据编号和原始页码留给 grounding JSON、provenance 或 synthesis。
 """
     (talk_dir / "report_writer_prompt.md").write_text(prompt, encoding="utf-8")
 
@@ -317,14 +321,18 @@ def build_slide_evidence(talk_dir: Path, metadata: dict[str, Any], intervals: li
     evidence: list[dict[str, str]] = []
     skipped_slides: list[dict[str, str]] = []
     max_chars = int(cfg["report"].get("max_transcript_chars_per_slide", 2500))
-    for idx, interval in enumerate(intervals, start=1):
+    for original_idx, interval in enumerate(intervals, start=1):
         image = Path(interval.get("talk_slide_path") or interval["representative_path"])
         time_label = interval_time_label(interval)
         local_text = slide_window_text(timeline, interval_ranges(interval), max_chars)
-        ocr_text = ocr_slide_text(image, ocr_dir / f"{idx:04d}_{image.stem}.txt")
+        ocr_text = ocr_slide_text(image, ocr_dir / f"{original_idx:04d}_{image.stem}.txt")
         skip_reason = low_information_reason(metadata["title"], ocr_text, local_text)
+        local_idx = len(evidence) + 1
         row = {
-            "slide_index": str(idx),
+            # Backward-compatible: slide_index has historically meant the original interval index.
+            "slide_index": str(original_idx),
+            "local_evidence_index": str(local_idx),
+            "original_slide_index": str(original_idx),
             "time": time_label,
             "image": str(image),
             "ocr_text": clean_ocr_text(ocr_text, 1800),
@@ -495,7 +503,8 @@ def agent_grounding_task(talk_dir: Path, report_path: Path, metadata: dict[str, 
         "instructions": [
             "Review the report at claim level against evidence.json, slide_cognition outputs, qa_pairs, and images.",
             "checked_claims must list each important claim with evidence_refs and support status.",
-            "Set requires_revision=true if the report is template-like, unsupported, missing major slide coverage, or misuses QA fragments.",
+            "Review reader-facing prose quality, not just factual support.",
+            "Set template_or_style_issues and requires_revision=true if the report is template-like, exposes evidence.json/slide_index audit scaffolding in the main prose, over-expands low-information slides, misses major slide coverage, or misuses QA fragments.",
         ],
         "validation_rules": [
             {
@@ -526,6 +535,12 @@ def agent_report_task(
     dependency_outputs = [output for task in cognition_tasks for output in task["output_paths"]]
     dependency_outputs.extend(qa_task["output_paths"])
     provenance_path = (ensure_dir(talk_dir / "agent_execution") / "report_writer_provenance.json").resolve()
+    synthesis_path = (talk_dir / TALK_SYNTHESIS_FILE).resolve()
+    dependency_identities = {
+        "local_evidence_index": "1-based row number in this talk's evidence.json",
+        "original_slide_index": "source replay/PPT slide index when present in evidence.json",
+        "report_section_number": "reader-facing order chosen for the final report",
+    }
     return {
         "task_id": f"report:{metadata['slug']}",
         "stage": "report_write",
@@ -538,6 +553,7 @@ def agent_report_task(
         "metadata_path": str((talk_dir / "metadata.json").resolve()),
         "timeline_path": str((talk_dir / "timeline.txt").resolve()),
         "report_path": str(report_path.resolve()),
+        "synthesis_path": str(synthesis_path),
         "execution_provenance_path": str(provenance_path),
         "requires_subagent": True,
         "input_paths": [
@@ -548,8 +564,10 @@ def agent_report_task(
             str((talk_dir / "slides").resolve()),
         ],
         "dependency_output_paths": dependency_outputs,
+        "intermediate_output_paths": [str(synthesis_path)],
         "output_paths": [str(report_path.resolve())],
-        "allowed_write_paths": [str(report_path.resolve()), str(provenance_path)],
+        "allowed_write_paths": [str(report_path.resolve()), str(synthesis_path), str(provenance_path)],
+        "slide_identity_contract": dependency_identities,
         "required_sections": REPORT_REQUIRED_SECTIONS,
         "required_provenance": {
             "path": str(provenance_path),
@@ -572,6 +590,7 @@ def agent_report_task(
             {"type": "exists", "paths": "output_paths"},
             {"type": "markdown_required_sections", "sections": REPORT_REQUIRED_SECTIONS},
             {"type": "markdown_image_links_exist"},
+            {"type": "talk_synthesis"},
             {"type": "consume_slide_cognition_and_qa_pairs"},
             {"type": "execution_provenance", "worker_type": "subagent", "isolation_scope": "single_report"},
             {"type": "report_quality"},
@@ -580,7 +599,10 @@ def agent_report_task(
         "quality_contract": [
             "One report task must be handled by one clean report-writing subagent context when the host supports subagents.",
             "Build topic-level understanding before writing: read metadata, timeline/ASR, all preserved slide screenshots, OCR evidence, slide cognition, QA, and any synthesis manifests for this assigned topic.",
+            "Write talk_synthesis.md before the final Markdown report; use it to map the talk's argument, slide roles, evidence-only slides, Q&A boundaries, and uncertainties.",
             "OCR, ASR, and screenshots are evidence for understanding, not report prose; do not turn noisy OCR tokens into concepts.",
+            "Do not expose evidence.json row numbers, original slide_index bookkeeping, or standalone slide_index lines in the reader-facing report body.",
+            "Keep local_evidence_index, original_slide_index, and report_section_number conceptually separate.",
             "Read every dependency_output_paths item before writing.",
             "Use slide_cognition main_claims, numbers_and_entities, speaker_intent, and qa_pairs where available.",
             "Do not use a repeated page template or copy OCR/ASR paragraphs as the report body.",
@@ -589,17 +611,29 @@ def agent_report_task(
         "subagent_contract": [
             "one clean subagent context per report",
             "topic-level understanding before writing",
+            "write talk_synthesis.md before the final report",
             "OCR, ASR, and screenshots are evidence for understanding",
             "write execution provenance to execution_provenance_path with worker_type=subagent and isolation_scope=single_report",
             "the subagent writes only output_paths and allowed_write_paths; the parent agent and CLI validate and resume",
         ],
-        "done_condition": "Write exactly one quality-gated Markdown report to output_paths[0] and one execution provenance JSON to execution_provenance_path after dependency_output_paths exist; both must pass validate --phase final.",
+        "done_condition": "After dependency_output_paths exist and validate, write talk_synthesis.md, exactly one quality-gated Markdown report to output_paths[0], and one execution provenance JSON to execution_provenance_path; all must pass validate --phase final.",
     }
 
 
 def agent_report_dispatch_plan(out_dir: Path, report_tasks: list[dict[str, Any]]) -> dict[str, Any]:
     workers: list[dict[str, Any]] = []
     for index, task in enumerate(report_tasks, start=1):
+        dependency_paths = [str(path) for path in task.get("dependency_output_paths", [])]
+        missing_dependencies = [path for path in dependency_paths if not Path(path).exists()]
+        dependency_status = {
+            "expected": len(dependency_paths),
+            "existing": len(dependency_paths) - len(missing_dependencies),
+            "missing": len(missing_dependencies),
+            "invalid": 0,
+            "missing_paths": missing_dependencies[:10],
+            "invalid_dependencies": [],
+            "ready": not missing_dependencies,
+        }
         workers.append(
             {
                 "worker_id": f"report-writer:{task.get('slug', index)}",
@@ -614,6 +648,11 @@ def agent_report_dispatch_plan(out_dir: Path, report_tasks: list[dict[str, Any]]
                 "task": task,
                 "input_paths": task.get("input_paths", []),
                 "dependency_output_paths": task.get("dependency_output_paths", []),
+                "dependency_validation_phase": "agent-tasks",
+                "expected_dependency_count": dependency_status["expected"],
+                "dependencies_ready": dependency_status["ready"],
+                "dependency_status": dependency_status,
+                "intermediate_output_paths": task.get("intermediate_output_paths", []),
                 "output_paths": task.get("output_paths", []),
                 "allowed_write_paths": task.get("allowed_write_paths", []),
                 "execution_provenance_path": task.get("execution_provenance_path"),
@@ -624,6 +663,8 @@ def agent_report_dispatch_plan(out_dir: Path, report_tasks: list[dict[str, Any]]
         "stage": "report_write",
         "requires_subagents": True,
         "required_report_subagents": len(report_tasks),
+        "dependencies_ready_count": sum(1 for worker in workers if worker["dependencies_ready"]),
+        "dependencies_blocked_count": sum(1 for worker in workers if not worker["dependencies_ready"]),
         "subagent_required_stage": "report_write",
         "authorization_message": REPORT_SUBAGENT_AUTHORIZATION_MESSAGE,
         "fallback_options": REPORT_SUBAGENT_FALLBACK_OPTIONS,
