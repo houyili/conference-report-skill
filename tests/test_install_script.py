@@ -54,6 +54,29 @@ class InstallScriptHelperTests(unittest.TestCase):
             self.assertIn(custom, paths)
             self.assertNotIn(home / "missing" / "skills", paths)
 
+    def test_candidate_skill_roots_discovers_openclaw_workspace_metadata(self):
+        installer = load_script_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            workspace = home / ".openclaw" / "workspace-demo"
+            local_root = workspace / "skills"
+            shared_root = home / ".openclaw" / "skills"
+            local_root.mkdir(parents=True)
+            shared_root.mkdir(parents=True)
+            (workspace / "TOOLS.md").write_text(
+                "- local_skills_root=~/.openclaw/workspace-demo/skills\n"
+                "- shared_skills_root=~/.openclaw/skills\n",
+                encoding="utf-8",
+            )
+
+            candidates = installer.candidate_skill_roots(home, {})
+
+            paths = [item.path for item in candidates]
+            labels = {item.path: item.label for item in candidates}
+            self.assertIn(local_root, paths)
+            self.assertIn(shared_root, paths)
+            self.assertEqual(labels[local_root], "OpenClaw workspace")
+
     def test_inspect_package_reports_version_and_clean_pip_check(self):
         installer = load_script_module()
         pip_show = mock.Mock(returncode=0, stdout="Name: faster-whisper\nVersion: 1.1.1\n", stderr="")

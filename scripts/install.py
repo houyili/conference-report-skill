@@ -12,6 +12,12 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from agent_skill_roots import candidate_skill_root_entries
+
 LOCAL_ASR_PACKAGE = "faster-whisper"
 
 
@@ -294,52 +300,10 @@ def dependency_check_warning(report: str) -> str:
 
 
 def candidate_skill_roots(home: Path, env: dict[str, str]) -> list[SkillRootCandidate]:
-    candidates: list[SkillRootCandidate] = []
-    seen: set[Path] = set()
-
-    def add(label: str, path: Path, source: str) -> None:
-        expanded = path.expanduser()
-        if not expanded.exists():
-            return
-        resolved = expanded.resolve()
-        if resolved in seen:
-            return
-        seen.add(resolved)
-        candidates.append(SkillRootCandidate(label=label, path=expanded, source=source))
-
-    env_keys = {
-        "AGENT_SKILLS_DIR": "Agent skills",
-        "CODEX_SKILLS_DIR": "Codex",
-        "CLAUDE_SKILLS_DIR": "Claude Code",
-        "ANTIGRAVITY_SKILLS_DIR": "Antigravity",
-        "OPENCLAW_SKILLS_DIR": "OpenClaw",
-    }
-    for key, label in env_keys.items():
-        value = env.get(key)
-        if value:
-            add(label, Path(value), key)
-
-    home_keys = {
-        "CODEX_HOME": "Codex",
-        "CLAUDE_HOME": "Claude Code",
-        "ANTIGRAVITY_HOME": "Antigravity",
-        "OPENCLAW_HOME": "OpenClaw",
-    }
-    for key, label in home_keys.items():
-        value = env.get(key)
-        if value:
-            add(label, Path(value) / "skills", f"{key}/skills")
-
-    known_relative = [
-        ("Codex", ".codex/skills"),
-        ("Claude Code", ".claude/skills"),
-        ("Antigravity", ".antigravity/skills"),
-        ("OpenClaw", ".openclaw/skills"),
-        ("Generic agent", ".agents/skills"),
+    return [
+        SkillRootCandidate(label=label, path=path, source=source)
+        for label, path, source in candidate_skill_root_entries(home, env)
     ]
-    for label, rel in known_relative:
-        add(label, home / rel, f"existing ~/{rel}")
-    return candidates
 
 
 def conda_executable(

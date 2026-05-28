@@ -118,6 +118,8 @@ The guided flow can use a project `.venv` (recommended), the current Python envi
 
 Installing the agent skill and making the CLI visible are separate steps. The skill tells an agent how to run the workflow, but the agent's shell still needs a usable `conference-report` command. At the end of the guided install, read the "Agent runtime check": it prints the absolute CLI path and warns if the current shell cannot resolve `conference-report` by name. The installer also records that absolute path in the installed skill copy at `.local/cli-path.txt` so agents that do not inherit your conda or shell `PATH` can still use the explicitly installed CLI. The `.local` directory is user-local install metadata and is not part of the repository source. You can also set `CONFERENCE_REPORT_CLI=/absolute/path/to/conference-report` for an agent runtime.
 
+For OpenClaw, the installer also looks for workspace-local and shared skill roots declared by the user's OpenClaw workspace metadata, then asks which target to use. This keeps OpenClaw setup user-confirmed and portable instead of relying on a maintainer-specific path.
+
 Command-line flags are available for automation and contributors. For example, `--with-dev` installs development dependencies such as `pytest` for running tests; it is not required for normal report generation.
 
 On macOS, the installer can also guide you through Homebrew installation of `ffmpeg` and optional `tesseract`:

@@ -108,6 +108,8 @@ The agent host does not decide the workflow. Execute tasks in this order: `slide
 
 If the host supports subagents but requires explicit user approval, ask before dispatching them. At this gate, slide cognition, QA detection, and grounding review may be completed sequentially in the parent context when needed, but report_write cannot be completed sequentially in parent context. Final report writing must produce `worker_type: subagent` provenance, so a parent-written report will fail `validate --phase final`. If the host has no subagent capability or the user does not authorize it, stop at the gate or switch to `--writer evidence` / `--writer openai`; do not pretend the output is an agent-written final report. Do not skip a stage and do not edit any task manifest.
 
+OpenClaw host note: when this skill is installed in an OpenClaw workspace or shared skills root, keep the conference-report run under the CLI's `pipeline_state.json` gate rather than converting it into OpenClaw's research `work_status.md` workflow. Use OpenClaw's native subagent/session mechanism for each ready `report_write` worker, pass exactly that worker's task object and declared paths, and set `host_agent_framework` to `openclaw` in `report_writer_provenance.json`. OpenClaw-specific research memory, `research.db`, paper notes, or publication workflows are separate host workflows and should only be updated if the user explicitly asks for that integration.
+
 Subagent budgeting:
 
 - **minimum-subagent path**: complete `slide_cognition`, `qa_detection`, and `grounding_review` sequentially in the parent context; start exactly one clean `report_write` subagent for each `agent_report_tasks.json` item.

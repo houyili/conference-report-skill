@@ -12,6 +12,12 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from agent_skill_roots import candidate_skill_root_entries
+
 SKILL_NAME = "conference-report"
 PROJECT_PACKAGES = ["conference-report"]
 OPTIONAL_ASR_PACKAGES = ["faster-whisper"]
@@ -144,37 +150,15 @@ def candidate_skill_installs(home: Path, env: dict[str, str], skill_name: str = 
     candidates: list[SkillInstall] = []
     seen: set[Path] = set()
 
-    def add(label: str, root: Path, source: str) -> None:
+    for label, root, source in candidate_skill_root_entries(home, env):
         path = root.expanduser() / skill_name
         if not path.exists():
-            return
+            continue
         resolved = path.resolve()
         if resolved in seen:
-            return
+            continue
         seen.add(resolved)
         candidates.append(SkillInstall(label=label, path=path, source=source))
-
-    env_roots = {
-        "AGENT_SKILLS_DIR": "Agent skills",
-        "CODEX_SKILLS_DIR": "Codex",
-        "CLAUDE_SKILLS_DIR": "Claude Code",
-        "ANTIGRAVITY_SKILLS_DIR": "Antigravity",
-        "OPENCLAW_SKILLS_DIR": "OpenClaw",
-    }
-    for key, label in env_roots.items():
-        value = env.get(key)
-        if value:
-            add(label, Path(value), key)
-
-    home_roots = [
-        ("Codex", ".codex/skills"),
-        ("Claude Code", ".claude/skills"),
-        ("Antigravity", ".antigravity/skills"),
-        ("OpenClaw", ".openclaw/skills"),
-        ("Generic agent", ".agents/skills"),
-    ]
-    for label, rel in home_roots:
-        add(label, home / rel, f"existing ~/{rel}")
     return candidates
 
 

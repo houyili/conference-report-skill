@@ -75,6 +75,24 @@ class UninstallScriptTests(unittest.TestCase):
 
             self.assertEqual([item.path for item in installs], [other_skill, codex_skill])
 
+    def test_candidate_skill_installs_discovers_openclaw_workspace_copy(self):
+        uninstaller = load_script_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            workspace = home / ".openclaw" / "workspace-demo"
+            skill = workspace / "skills" / "conference-report"
+            skill.mkdir(parents=True)
+            (skill / "SKILL.md").write_text("name: conference-report\n", encoding="utf-8")
+            (workspace / "TOOLS.md").write_text(
+                "- local_skills_root=~/.openclaw/workspace-demo/skills\n",
+                encoding="utf-8",
+            )
+
+            installs = uninstaller.candidate_skill_installs(home, {}, "conference-report")
+
+            self.assertEqual([item.path for item in installs], [skill])
+            self.assertEqual(installs[0].label, "OpenClaw workspace")
+
     def test_dedupe_existing_paths_collapses_symlinked_python_aliases(self):
         uninstaller = load_script_module()
         with tempfile.TemporaryDirectory() as tmp:

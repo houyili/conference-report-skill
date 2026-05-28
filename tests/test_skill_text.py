@@ -107,6 +107,15 @@ class ConferenceReportSkillTextTests(unittest.TestCase):
         self.assertIn("report_write cannot be completed sequentially in parent context", text)
         self.assertIn("slide cognition, QA detection, and grounding review may be completed sequentially", text)
 
+    def test_skill_documents_openclaw_host_note(self):
+        text = SKILL_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("OpenClaw host note", text)
+        self.assertIn("pipeline_state.json", text)
+        self.assertIn("host_agent_framework", text)
+        self.assertIn("openclaw", text)
+        self.assertIn("work_status.md", text)
+
     def test_skill_documents_dependency_ready_report_dispatch(self):
         text = SKILL_PATH.read_text(encoding="utf-8")
 

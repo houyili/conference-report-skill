@@ -140,6 +140,29 @@ class InstallAgentSkillTests(unittest.TestCase):
 
             self.assertEqual(candidates, [("Codex", codex_root, "existing ~/.codex/skills")])
 
+    def test_candidate_skill_roots_discovers_openclaw_workspace_tools_roots(self):
+        installer = load_script_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            openclaw_home = home / ".openclaw"
+            workspace = openclaw_home / "workspace-demo"
+            local_root = workspace / "skills"
+            shared_root = openclaw_home / "skills"
+            local_root.mkdir(parents=True)
+            shared_root.mkdir(parents=True)
+            (workspace / "TOOLS.md").write_text(
+                "- local_skills_root=~/.openclaw/workspace-demo/skills\n"
+                "- shared_skills_root=~/.openclaw/skills\n",
+                encoding="utf-8",
+            )
+
+            candidates = installer.candidate_skill_roots(home, {})
+
+            paths = [path for _label, path, _source in candidates]
+            self.assertIn(local_root, paths)
+            self.assertIn(shared_root, paths)
+            self.assertEqual(paths.count(shared_root), 1)
+
     def test_prompt_for_upgrade_recommends_first_installed_skill_root(self):
         installer = load_script_module()
         with tempfile.TemporaryDirectory() as tmp:
